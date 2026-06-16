@@ -1,0 +1,13 @@
+packages:
+  - '.'
+  - 'web'
+
+# Native deps whose build scripts pnpm must run (it blocks them by default):
+# esbuild powers the test + build transform; sharp renders the PWA icons.
+# onlyBuiltDependencies covers pnpm 10.x; allowBuilds covers pnpm 11.x.
+onlyBuiltDependencies:
+  - esbuild
+  - sharp
+allowBuilds:
+  esbuild: true
+  sharp: true

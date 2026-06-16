@@ -1,0 +1,19 @@
+node_modules/
+dist/
+.next/
+out/
+coverage/
+*.log
+.DS_Store
+.env*
+# generated mockup renders (regenerable)
+mockups/*.png
+# vault test scratch
+.scratch/
+# per-machine web state: which vault is open + recents (not source)
+.agentkeep-web-state.json
+# seeded dev vault (regenerable via web/scripts/seed-dev-vault.mjs; has its own .git)
+dev-vault/
+# live render screenshots from the smoke tests (regenerable; not source)
+web/*.png
+web/tsconfig.tsbuildinfo

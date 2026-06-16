@@ -1,0 +1,1222 @@
+@import "tailwindcss";
+
+/* ============================================================================
+   Agentkeep — "Reading Room" design language (notebook / library).
+   Warm paper + ink + a reading-lamp green; flat surfaces + 1px borders, no glow.
+   Font families are provided as CSS variables by next/font/local (layout.tsx):
+     --font-display  Fraunces       (page headers + brand wordmark — warm serif)
+     --font-grotesk  Space Grotesk  (editor note-headings + the Run button)
+     --font-mono     Space Mono     (labels / chrome)
+     --font-geist    Geist          (body)
+   ========================================================================== */
+
+:root {
+  /* ===== Reading Room — dark ("after hours"): a candlelit library. A warm
+     espresso ground, parchment ink, a reading-lamp green, a soft brass glow. ===== */
+  color-scheme: dark;      /* native controls (checkbox, scrollbar, caret) match the theme */
+  --acc: #7FB497;          /* reading-lamp green (links, active nav, agent attribution) */
+  --accg: 127, 180, 151;   /* accent rgb for tints */
+  --acc-2: #7FB497;
+
+  --space: #1B1712;        /* page background — warm espresso, the library after hours */
+  --panel: #241F18;        /* raised surface — worn wood / leather */
+  --panel-2: #2F2820;      /* card / hover elevation */
+  --ink: #ECE3D0;          /* parchment text */
+  --mut: #B3A78F;
+  --faint: #8C8068;        /* quietest tier — still clears WCAG-AA on small labels */
+  --line: #352E24;
+  --line-2: #473E30;
+  --green: #82C79E;        /* success only */
+
+  /* depth cues — a warm lamp glow, never cold neon */
+  --bg-glow: radial-gradient(120% 80% at 50% -8%, rgba(199, 158, 92, 0.07), transparent 56%);
+  --lift: inset 0 1px 0 rgba(255, 245, 225, 0.04);
+  --glow-acc: 0 0 0 0 transparent;
+
+  --col: 820px;            /* shared content column — page body + topbar align to this */
+}
+
+/* Applied when the no-flash script in layout.tsx sets data-theme="light" on
+   <html>; the tokens below switch the page from the after-hours dark to paper. */
+[data-theme="light"] {
+  /* Reading Room — light: an open notebook on a warm desk. Cream paper, deep
+     ink, the same reading-lamp green (deepened for contrast on the bright page). */
+  color-scheme: light;
+  --acc: #3B6B53;          /* reading-lamp green */
+  --accg: 59, 107, 83;
+  --acc-2: #3B6B53;
+
+  --space: #F4EDDF;        /* warm cream paper */
+  --panel: #FBF6EA;        /* raised paper — a card on the desk */
+  --panel-2: #EFE7D5;      /* card / hover */
+  --ink: #2B2820;          /* deep ink */
+  --mut: #5C5446;
+  --faint: #756B57;        /* quietest tier — still clears WCAG-AA on small labels */
+  --line: #E4DAC6;         /* warm hairline */
+  --line-2: #D6CAB2;
+  --green: #2F7D54;
+
+  --bg-glow: radial-gradient(120% 80% at 50% -10%, rgba(255, 252, 244, 0.6), transparent 60%);
+  --lift: inset 0 1px 0 rgba(255, 255, 255, 0.6);
+  --glow-acc: 0 0 0 0 transparent;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  margin: 0;
+  min-height: 100%;
+}
+
+body {
+  background: var(--bg-glow), var(--space);
+  background-attachment: fixed;
+  color: var(--ink);
+  font-family: var(--font-geist), system-ui, sans-serif;
+  font-size: 15px;
+  line-height: 1.6;
+  -webkit-font-smoothing: antialiased;
+  position: relative;
+  overflow-x: hidden;
+}
+
+/* ===== keyboard focus (app-wide) =====
+   The UA default outline is invisible on ink; a flat green ring is the
+   one visible focus signal. Inputs that set `outline: none` below keep their
+   own border-color focus styles instead (same specificity, later wins). */
+:focus-visible {
+  outline: 2px solid var(--acc);
+  outline-offset: 2px;
+}
+
+/* ===== motion (restrained; physics only, never decoration) ===== */
+@media (prefers-reduced-motion: no-preference) {
+  a,
+  button,
+  input,
+  textarea {
+    transition:
+      color 120ms ease,
+      background-color 120ms ease,
+      border-color 120ms ease,
+      opacity 120ms ease;
+  }
+  /* Route content fades in on mount; pages remount per navigation. */
+  main {
+    animation: route-fade 120ms ease;
+  }
+  @keyframes route-fade {
+    from { opacity: 0; }
+    to { opacity: 1; }
+  }
+}
+
+/* ===== scrollbars (thin, ink-toned) ===== */
+::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  background-color: var(--line-2);
+  border-radius: 3px;
+  border: 2px solid transparent;
+  background-clip: padding-box;
+}
+::-webkit-scrollbar-thumb:hover {
+  background-color: var(--faint);
+}
+/* Firefox (no ::-webkit-scrollbar support) gets the standard properties. */
+@supports not selector(::-webkit-scrollbar) {
+  * {
+    scrollbar-width: thin;
+    scrollbar-color: var(--line-2) transparent;
+  }
+}
+
+.disp { font-family: var(--font-display); }
+.mono { font-family: var(--font-mono); }
+.lbl {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  letter-spacing: 0.8px;
+  text-transform: uppercase;
+  color: var(--faint);
+}
+.muted { color: var(--mut); }
+.sub { color: var(--faint); font-size: 13px; }
+
+/* ===== app shell ===== */
+.app {
+  display: grid;
+  grid-template-columns: 226px 1fr;
+  min-height: 100vh;
+  max-width: 1180px;
+  margin: 0 auto;
+}
+.rail {
+  padding: 26px 18px;
+  display: flex;
+  flex-direction: column;
+  gap: 28px;
+  border-right: 1px solid var(--line);
+}
+.brand {
+  display: flex;
+  align-items: center;
+  gap: 11px;
+  text-decoration: none;
+  color: var(--ink);
+}
+.brandmark {
+  flex: none;
+  display: block;
+}
+.brand .name {
+  font-family: var(--font-display);
+  font-weight: 600;
+  font-size: 20px;
+  letter-spacing: 0;
+}
+.railvault {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: -16px;
+  padding: 7px 11px;
+  border-radius: 3px;
+  text-decoration: none;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  color: var(--mut);
+}
+.railvault:hover { color: var(--ink); border-color: rgba(var(--accg), 0.35); }
+.railvault-dot {
+  flex: none;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--acc);
+}
+.railvault-name {
+  font-family: var(--font-mono);
+  font-size: 11.5px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.nav {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.nav a {
+  display: flex;
+  align-items: center;
+  gap: 11px;
+  padding: 9px 11px;
+  color: var(--mut);
+  text-decoration: none;
+  font-weight: 500;
+  border-radius: 3px;
+}
+.nav a .g {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  color: var(--faint);
+}
+.nav a:hover {
+  background: var(--panel);
+  color: var(--ink);
+}
+.nav a.cur {
+  background: rgba(var(--accg), 0.07);
+  color: var(--ink);
+  /* a 2px green margin-rule on the current entry, like a marked line in an index */
+  box-shadow: inset 2px 0 0 var(--acc);
+}
+.nav a.cur .g {
+  color: var(--acc);
+}
+.rail .foot {
+  margin-top: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  font-size: 12.5px;
+  color: var(--mut);
+}
+.online {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.online .d {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  /* Calm status marker, NOT a "live daemon" beacon — the agent runs on demand. */
+  background: var(--acc-2);
+}
+
+/* ===== theme switch (rail foot) ===== */
+.themeswitch {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  background: none;
+  border: none;
+  padding: 0;
+  cursor: pointer;
+  color: var(--mut);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  letter-spacing: 1px;
+  text-transform: uppercase;
+}
+.themeswitch:hover { color: var(--ink); }
+.themeswitch-track {
+  position: relative;
+  flex: none;
+  width: 42px;
+  height: 23px;
+  border-radius: 999px;
+  background: var(--panel);
+  border: 1px solid var(--line);
+}
+.themeswitch-ic {
+  position: absolute;
+  top: 50%;
+  transform: translateY(-50%);
+  font-size: 10px;
+  line-height: 1;
+  color: var(--faint);
+}
+.themeswitch-ic.moon { left: 6px; }
+.themeswitch-ic.sun { right: 6px; }
+.themeswitch-knob {
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 17px;
+  height: 17px;
+  border-radius: 50%;
+  background: var(--acc);
+  transition: left 150ms ease;
+}
+[data-theme="light"] .themeswitch-knob { left: 21px; }
+
+/* ===== topbar ===== */
+/* The divider spans the full main column; the bar's content centers to --col so
+   the capture box lines up with the page body below it (no lopsided overhang). */
+.topwrap {
+  border-bottom: 1px solid var(--line);
+}
+.top {
+  display: flex;
+  align-items: center;
+  gap: 13px;
+  padding: 17px 40px;
+  max-width: var(--col);
+  margin: 0 auto;
+}
+.cap {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  color: var(--mut);
+  font-size: 14.5px;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 3px;
+  padding: 11px 15px;
+  box-shadow: var(--lift);
+}
+.cap .p { color: var(--acc); font-weight: 600; }
+.capin {
+  flex: 1;
+  background: none;
+  border: none;
+  outline: none;
+  color: var(--ink);
+  font-family: inherit;
+  font-size: 14.5px;
+}
+.capin::placeholder { color: var(--mut); }
+/* The capture input suppresses its own outline; the wrapping box shows focus. */
+.cap:focus-within { border-color: rgba(var(--accg), 0.45); }
+.capin:disabled { opacity: 0.6; }
+.topnote {
+  display: flex;
+  align-items: flex-start;
+  gap: 7px;
+  max-width: var(--col);
+  margin: -6px auto 0; /* pull up toward the capture bar (the .top has 17px below) */
+  padding: 0 40px 14px; /* breathing room above the topwrap's bottom rule */
+  color: var(--mut);
+  font-size: 13px;
+  line-height: 1.5;
+  animation: topnote-in 140ms ease;
+}
+@keyframes topnote-in {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+.topnote-icon { flex: none; margin-top: 1px; }
+.topnote.ok .topnote-icon { color: var(--green); }
+.topnote.err { color: #C0564E; } /* error red — reads on cream + espresso */
+.topnote-snip { font-style: italic; color: var(--ink); }
+.kbd {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  background: none;
+  border: 1px solid var(--line-2);
+  border-radius: 2px;
+  padding: 3px 7px;
+  color: var(--mut);
+  cursor: pointer;
+}
+.kbd:hover { color: var(--ink); border-color: rgba(var(--accg), 0.3); }
+
+/* ===== page content ===== */
+.wrap {
+  padding: 44px 40px 60px;
+  max-width: var(--col);
+  margin: 0 auto;
+}
+.hi {
+  font-family: var(--font-display);
+  font-weight: 500;
+  font-size: 29px;
+  letter-spacing: 0;
+  margin: 0 0 7px;
+}
+
+/* ===== search (/search) ===== */
+.searchtitle {
+  font-family: var(--font-display);
+  font-weight: 500;
+  font-size: 29px;
+  color: var(--ink);
+  margin: 0 0 20px;
+  letter-spacing: 0;
+}
+.searchin {
+  width: 100%;
+  background: var(--panel);
+  border: 1px solid var(--line-2);
+  border-radius: 3px;
+  padding: 12px 15px;
+  color: var(--ink);
+  font-family: inherit;
+  font-size: 15px;
+  outline: none;
+}
+.searchin:focus {
+  border-color: rgba(var(--accg), 0.45);
+}
+.searchin::placeholder { color: var(--mut); }
+.searchhint {
+  color: var(--faint);
+  font-size: 13px;
+  margin: 16px 2px 0;
+}
+.searchres {
+  list-style: none;
+  margin: 16px 0 0;
+  padding: 0;
+}
+.searchres-item {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 14px;
+  padding: 11px 13px;
+  border-top: 1px solid var(--line);
+  color: var(--ink);
+  text-decoration: none;
+  border-radius: 3px;
+}
+.searchres li:first-child .searchres-item { border-top: none; }
+.searchres-item:hover { background: var(--panel); }
+.sr-title { font-size: 14.5px; }
+.sr-kind {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--faint);
+  letter-spacing: 0.5px;
+  flex: none;
+}
+
+/* ===== notes editor (the vault home, /) ===== */
+.notes {
+  display: grid;
+  grid-template-columns: 248px 1fr;
+  height: calc(100vh - 60px); /* viewport minus the topbar */
+  min-height: 0;
+}
+.notelist {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 22px 16px;
+  border-right: 1px solid var(--line);
+  min-height: 0;
+}
+.notefilter {
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 3px;
+  padding: 9px 12px;
+  color: var(--ink);
+  font-family: var(--font-geist), system-ui, sans-serif;
+  font-size: 13.5px;
+  outline: none;
+}
+.notefilter:focus {
+  border-color: rgba(var(--accg), 0.4);
+}
+.notefilter::placeholder { color: var(--faint); }
+.notelist-scroll {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  overflow-y: auto;
+  min-height: 0;
+}
+.noteitem {
+  text-align: left;
+  background: none;
+  border: none;
+  color: var(--mut);
+  font-family: var(--font-geist), system-ui, sans-serif;
+  font-size: 14px;
+  padding: 8px 11px;
+  border-radius: 3px;
+  cursor: pointer;
+  line-height: 1.35;
+}
+.noteitem:hover { background: var(--panel); color: var(--ink); }
+.noteitem.cur {
+  background: rgba(var(--accg), 0.05);
+  color: var(--ink);
+  /* the same green margin-rule as the nav's current entry */
+  box-shadow: inset 2px 0 0 var(--acc);
+}
+
+.editorpane {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  min-width: 0;
+}
+.editorhead {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 22px 36px 12px;
+}
+.editorhead h1 {
+  flex: 1;
+  font-family: var(--font-display);
+  font-weight: 500;
+  font-size: 26px;
+  letter-spacing: 0;
+  color: var(--ink);
+  margin: 0;
+}
+.savebadge {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  letter-spacing: 1.5px;
+  text-transform: uppercase;
+  color: var(--faint);
+  border: 1px solid var(--line);
+  border-radius: 2px;
+  padding: 4px 9px;
+  white-space: nowrap;
+}
+.savebadge.saving { color: var(--acc); border-color: rgba(var(--accg), 0.3); }
+.savebadge.unsaved { color: var(--acc-2); border-color: rgba(var(--accg), 0.3); }
+.savebadge.conflict {
+  color: #f0b27a;
+  border-color: rgba(240, 178, 122, 0.45);
+  background: rgba(240, 178, 122, 0.08);
+  cursor: pointer;
+}
+.conflictnote {
+  margin: 0 36px 6px;
+  padding: 10px 14px;
+  font-size: 13px;
+  color: var(--ink);
+  background: rgba(240, 178, 122, 0.08);
+  border: 1px solid rgba(240, 178, 122, 0.35);
+  border-radius: 3px;
+}
+.conflictnote button {
+  margin-left: 6px;
+  background: none;
+  border: none;
+  color: #f0b27a;
+  font-weight: 600;
+  cursor: pointer;
+  font-size: 13px;
+}
+/* in-theme inline create-prompt (replaces native window.confirm) */
+.createprompt {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  margin: 14px 36px 0;
+  padding: 12px 16px;
+  font-size: 13.5px;
+  color: var(--ink);
+  background: rgba(var(--accg), 0.08);
+  border: 1px solid rgba(var(--accg), 0.35);
+  border-radius: 3px;
+}
+.createprompt .cp-text { flex: 1; }
+.createprompt .cp-acts { display: flex; gap: 14px; flex: none; }
+.createprompt button {
+  font-family: inherit;
+  font-size: 13px;
+  font-weight: 600;
+  background: none;
+  border: none;
+  cursor: pointer;
+}
+.createprompt .cp-ok { color: var(--acc-2); }
+.createprompt .cp-no { color: var(--faint); }
+.editorbox {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 0 36px;
+}
+.editorbox .cm-editor { height: 100%; }
+.editorempty {
+  display: grid;
+  place-items: center;
+  height: 100%;
+  padding: 24px;
+}
+.ee-card {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  text-align: center;
+  gap: 5px;
+  max-width: 360px;
+}
+.ee-star {
+  color: var(--acc);
+  font-size: 26px;
+  line-height: 1;
+  margin-bottom: 8px;
+}
+.ee-title {
+  font-family: var(--font-display);
+  font-weight: 500;
+  font-size: 20px;
+  color: var(--ink);
+  letter-spacing: 0.1px;
+  margin: 0;
+}
+.ee-sub { font-family: var(--font-display); font-style: italic; color: var(--mut); font-size: 15px; line-height: 1.5; margin: 0; }
+.ee-links { display: flex; gap: 18px; margin-top: 16px; }
+.ee-link { color: var(--acc); text-decoration: none; font-size: 13.5px; font-weight: 500; }
+.ee-link:hover { text-decoration: underline; }
+.backlinks {
+  border-top: 1px solid var(--line);
+  padding: 16px 36px 22px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.backlinks-lbl {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  margin-bottom: 4px;
+}
+.backlinks-lbl .dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--acc-2);
+}
+.backlink {
+  text-align: left;
+  background: none;
+  border: none;
+  color: var(--acc-2);
+  font-family: var(--font-geist), system-ui, sans-serif;
+  font-size: 13.5px;
+  padding: 2px 0;
+  cursor: pointer;
+  width: fit-content;
+}
+.backlink:hover { text-decoration: underline; }
+
+/* ===== per-note provenance (the two-driver vault, made visible) ===== */
+/* "agent edited · 5m ago" near the title — calm green, never loud. */
+.provbadge.agent {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  letter-spacing: 1px;
+  text-transform: uppercase;
+  color: var(--acc);
+  border: 1px solid rgba(var(--accg), 0.3);
+  background: rgba(var(--accg), 0.07);
+  border-radius: 2px;
+  padding: 4px 9px;
+  white-space: nowrap;
+}
+.provbadge .provtime { color: var(--faint); }
+/* The "History" affordance — a quiet pill, not a wall. */
+.histbtn {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  letter-spacing: 1.5px;
+  text-transform: uppercase;
+  color: var(--faint);
+  border: 1px solid var(--line);
+  border-radius: 2px;
+  padding: 4px 9px;
+  background: none;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.histbtn:hover { color: var(--mut); border-color: var(--line-2); }
+.histbtn.open { color: var(--acc-2); border-color: rgba(var(--accg), 0.3); }
+/* The history popover panel. */
+.histpanel {
+  margin: 0 36px 6px;
+  border: 1px solid var(--line);
+  border-radius: 3px;
+  background: var(--panel);
+  overflow: hidden;
+}
+.histhead {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 11px 16px;
+  border-bottom: 1px solid var(--line);
+}
+.histlbl {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  letter-spacing: 1.5px;
+  text-transform: uppercase;
+  color: var(--mut);
+}
+.histclose {
+  background: none;
+  border: none;
+  color: var(--faint);
+  cursor: pointer;
+  font-size: 13px;
+  line-height: 1;
+  padding: 2px 4px;
+}
+.histclose:hover { color: var(--mut); }
+.histrows { display: flex; flex-direction: column; }
+.histrow {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  padding: 11px 16px;
+  border-bottom: 1px solid var(--line);
+}
+.histrow:last-child { border-bottom: none; }
+.authchip {
+  flex: none;
+  font-family: var(--font-mono);
+  font-size: 10px;
+  letter-spacing: 0.5px;
+  border-radius: 2px;
+  padding: 3px 8px;
+  margin-top: 1px;
+  white-space: nowrap;
+}
+.authchip.agent {
+  color: var(--acc);
+  background: rgba(var(--accg), 0.09);
+  border: 1px solid rgba(var(--accg), 0.28);
+}
+.authchip.human {
+  color: var(--mut);
+  background: var(--panel);
+  border: 1px solid var(--line);
+}
+.histbody { flex: 1; min-width: 0; }
+.histmsg {
+  color: var(--ink);
+  font-size: 13.5px;
+  line-height: 1.4;
+  overflow-wrap: anywhere;
+}
+.histmeta {
+  color: var(--faint);
+  font-size: 11.5px;
+  font-family: var(--font-mono);
+  margin-top: 3px;
+}
+.histsha { color: var(--faint); }
+.histundo {
+  flex: none;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--acc-2);
+  background: none;
+  border: 1px solid rgba(var(--accg), 0.3);
+  border-radius: 2px;
+  padding: 4px 10px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.histundo:hover:not(:disabled) {
+  background: rgba(var(--accg), 0.08);
+  border-color: rgba(var(--accg), 0.45);
+}
+.histundo:disabled { opacity: 0.5; cursor: default; }
+
+/* ===== connect your agent (/settings) ===== */
+.connect { max-width: var(--col); }
+.connect-head h1 {
+  font-family: var(--font-display);
+  font-weight: 500;
+  font-size: 29px;
+  color: var(--ink);
+  margin: 0 0 9px;
+  letter-spacing: 0;
+}
+.connect-lede {
+  font-family: var(--font-display);
+  font-style: italic;
+  color: var(--mut);
+  font-size: 16px;
+  line-height: 1.5;
+  margin: 0;
+  max-width: 600px;
+}
+.connect-sec {
+  margin-top: 30px;
+  padding-top: 22px;
+  border-top: 1px solid var(--line);
+}
+.connect-sec .lbl { display: block; margin-bottom: 12px; }
+.connect-note {
+  color: var(--mut);
+  font-size: 14px;
+  margin: 14px 0 8px;
+}
+.connect-sub { margin: 8px 0 0; }
+.connect-foot { margin: 34px 0 0; }
+.inlinecode {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  color: var(--ink);
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 2px;
+  padding: 1px 6px;
+}
+.connect-link { color: var(--acc-2); }
+.connect-link:hover { text-decoration: underline; }
+
+/* copy-able code block */
+.codeblock {
+  position: relative;
+  margin: 4px 0;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 3px;
+  padding: 14px 16px 12px;
+}
+.codeblock-lbl {
+  display: block;
+  margin-bottom: 8px;
+  color: var(--faint);
+}
+.codeblock-copy {
+  position: absolute;
+  top: 10px;
+  right: 10px;
+  font-family: var(--font-mono);
+  font-size: 10px;
+  letter-spacing: 1px;
+  text-transform: uppercase;
+  color: var(--mut);
+  background: var(--panel);
+  border: 1px solid var(--line-2);
+  border-radius: 2px;
+  padding: 5px 10px;
+  cursor: pointer;
+}
+.codeblock-copy:hover {
+  color: var(--acc);
+  border-color: rgba(var(--accg), 0.5);
+}
+.codeblock-pre {
+  margin: 0;
+  overflow-x: auto;
+  font-family: var(--font-mono);
+  font-size: 12.5px;
+  line-height: 1.7;
+  color: var(--ink);
+  white-space: pre;
+}
+.codeblock-pre code { font-family: inherit; }
+
+/* BYO-key status badge */
+.keybadge {
+  display: flex;
+  align-items: flex-start;
+  gap: 11px;
+  padding: 13px 16px;
+  border-radius: 3px;
+  font-size: 14px;
+  color: var(--ink);
+}
+.keybadge.on {
+  background: rgba(var(--accg), 0.1);
+  border: 1px solid rgba(var(--accg), 0.3);
+}
+.keybadge.off {
+  background: var(--panel);
+  border: 1px solid var(--line);
+}
+.keybadge .keydot {
+  flex: none;
+  width: 8px;
+  height: 8px;
+  margin-top: 7px;
+  border-radius: 50%;
+}
+.keybadge.on .keydot {
+  background: var(--green);
+}
+.keybadge.off .keydot {
+  background: var(--faint);
+}
+.keybadge .keytext b { font-weight: 600; }
+
+/* ===== vault switcher (/settings → Vault) ===== */
+.vault-current {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 11px 14px;
+  border-radius: 3px;
+  background: var(--panel);
+  border: 1px solid var(--line);
+}
+.vault-dot {
+  flex: none;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--acc);
+}
+.vault-path {
+  font-family: var(--font-mono);
+  font-size: 12.5px;
+  color: var(--ink);
+  overflow-wrap: anywhere;
+}
+.vault-open { margin-top: 16px; }
+.vault-field-lbl { display: block; margin-bottom: 8px; }
+.vault-row { display: flex; gap: 8px; }
+.vault-input {
+  flex: 1;
+  min-width: 0;
+  font-family: var(--font-mono);
+  font-size: 12.5px;
+  color: var(--ink);
+  background: var(--panel);
+  border: 1px solid var(--line-2);
+  border-radius: 3px;
+  padding: 9px 12px;
+}
+.vault-input::placeholder { color: var(--faint); }
+.vault-input:focus {
+  outline: none;
+  border-color: rgba(var(--accg), 0.5);
+}
+.vault-input:disabled { opacity: 0.6; }
+.vault-btn {
+  flex: none;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  letter-spacing: 0.5px;
+  text-transform: uppercase;
+  color: var(--space);
+  background: var(--acc);
+  border: 1px solid var(--acc);
+  border-radius: 3px;
+  padding: 0 16px;
+  cursor: pointer;
+}
+.vault-btn:hover:not(:disabled) { opacity: 0.85; }
+.vault-btn:disabled { opacity: 0.5; cursor: default; }
+.vault-error {
+  margin: 10px 0 0;
+  color: #F2A0A0;
+  font-size: 13px;
+}
+.vault-recents { margin-top: 18px; }
+.vault-recents .lbl { display: block; margin-bottom: 10px; }
+.vault-recent-row { display: flex; flex-direction: column; gap: 6px; }
+.vault-recent {
+  text-align: left;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  color: var(--mut);
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 3px;
+  padding: 8px 12px;
+  cursor: pointer;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.vault-recent:hover:not(:disabled) {
+  color: var(--acc);
+  border-color: rgba(var(--accg), 0.4);
+}
+.vault-recent:disabled { opacity: 0.5; cursor: default; }
+
+/* ===== vault graph (/graph) — flat canvas, flat legend, no decoration ===== */
+.graphwrap {
+  position: relative;
+  /* The canvas sizes itself in JS (viewport minus shell chrome); this just
+     keeps layout stable while it loads. */
+  min-height: 320px;
+}
+.graphcanvas {
+  display: block;
+  touch-action: none; /* pointer events own pan/drag; no browser scroll fight */
+}
+.graphlegend {
+  position: absolute;
+  top: 14px;
+  left: 18px;
+  display: flex;
+  gap: 14px;
+  font-size: 10px;
+  letter-spacing: 1px;
+  text-transform: uppercase;
+  color: var(--faint);
+  pointer-events: none;
+}
+.graphchip { display: flex; align-items: center; gap: 6px; }
+.graphdot {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+}
+.graphdot-memory { background: var(--acc); }
+.graphdot-note { background: var(--mut); }
+.graphdot-hollow { border: 1px solid var(--mut); }
+.graphempty {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  margin: 0;
+  color: var(--faint);
+  font-size: 13px;
+}
+
+/* ===== memory (/memory — what your agent believes) — flat lists only ===== */
+.memgroup { margin-top: 34px; }
+.memhead {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+  letter-spacing: 1.5px;
+  text-transform: uppercase;
+  color: var(--mut);
+  font-weight: 500;
+  margin: 0 0 12px;
+}
+/* A small accent marker so each memory type registers as a section, within the
+   single-accent system (the label text is the type; the dot just anchors it). */
+.memhead::before {
+  content: '';
+  flex: none;
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: var(--acc);
+}
+.memlist {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  border: 1px solid var(--line);
+  border-radius: 3px;
+  background: var(--panel);
+  box-shadow: var(--lift);
+}
+.memlist > li + li { border-top: 1px solid var(--line); }
+.memrow {
+  display: block;
+  padding: 13px 16px;
+  color: var(--ink);
+  text-decoration: none;
+  transition: background-color 120ms ease, box-shadow 120ms ease;
+}
+.memrow:hover {
+  background: rgba(var(--accg), 0.06);
+  box-shadow: inset 2px 0 0 var(--acc); /* refined left-edge accent on hover */
+}
+.memtitle { display: block; font-weight: 600; font-size: 14.5px; letter-spacing: 0.1px; }
+.memex {
+  display: block;
+  color: var(--mut);
+  font-size: 13px;
+  margin-top: 3px;
+  overflow-wrap: anywhere;
+}
+.memmeta {
+  display: block;
+  color: var(--faint);
+  font-size: 11px;
+  margin-top: 5px;
+}
+.memmeta:empty { display: none; }
+.memact {
+  display: flex;
+  align-items: baseline;
+  gap: 12px;
+  padding: 10px 16px;
+  font-size: 13px;
+}
+.memact .memmeta { margin-top: 0; flex: 0 0 52px; }
+.memactmsg { color: var(--ink); overflow-wrap: anywhere; }
+.memactpath {
+  color: var(--acc);
+  font-size: 11px;
+  text-decoration: none;
+  margin-left: auto;
+  overflow-wrap: anywhere;
+}
+.memactpath:hover { text-decoration: underline; }
+.memempty {
+  border: 1px solid var(--line);
+  border-radius: 3px;
+  background: var(--panel);
+  color: var(--mut);
+  font-size: 13.5px;
+  padding: 16px 18px;
+  margin-top: 18px;
+}
+.memempty code, .wrap .sub code {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  color: var(--acc);
+}
+
+/* ===== not found (404) — renders outside the app shell ===== */
+.nf {
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  padding: 40px 24px;
+  text-align: center;
+}
+.nf-star {
+  color: var(--acc);
+  font-size: 26px;
+  line-height: 1;
+}
+.nf-title {
+  font-family: var(--font-display);
+  font-weight: 500;
+  font-size: 23px;
+  letter-spacing: 0.2px;
+  color: var(--ink);
+  margin: 6px 0 0;
+}
+.nf-sub {
+  font-family: var(--font-display);
+  font-style: italic;
+  color: var(--mut);
+  font-size: 16px;
+  line-height: 1.5;
+  margin: 0;
+  max-width: 440px;
+}
+.nf-home {
+  margin-top: 16px;
+  color: var(--acc);
+  text-decoration: none;
+  font-weight: 500;
+  font-size: 14px;
+  border: 1px solid rgba(var(--accg), 0.3);
+  border-radius: 3px;
+  padding: 9px 15px;
+}
+.nf-home:hover {
+  background: rgba(var(--accg), 0.08);
+  border-color: rgba(var(--accg), 0.45);
+}
+
+@media (max-width: 720px) {
+  /* minmax(0,…) not 1fr: a bare 1fr column keeps min-width:auto and expands to
+     its content, so the rail would grow past the viewport and push the toggle
+     off-screen. Capping at 0 forces the nav (flex + overflow below) to scroll. */
+  .app { grid-template-columns: minmax(0, 1fr); }
+  .notes { grid-template-columns: 1fr; height: auto; }
+  .notelist { border-right: none; border-bottom: 1px solid var(--line); }
+  /* .notes drops to height:auto on mobile, so .cm-editor's height:100% would
+     collapse to 0 — give the editor a concrete min height and let the page scroll. */
+  .editorbox { overflow: visible; }
+  .editorbox .cm-editor { height: auto; min-height: 60vh; }
+  .rail {
+    flex-direction: row;
+    align-items: center;
+    gap: 14px;
+    border-right: none;
+    border-bottom: 1px solid var(--line);
+    padding: 13px 16px;
+    overflow-x: visible;
+  }
+  /* Only the nav scrolls horizontally; the brand (left) and the toggle (right)
+     sit outside that scroll, so flex pins them and the toggle is always visible. */
+  .railvault { display: none; }
+  .rail .nav { flex-direction: row; flex: 1; min-width: 0; overflow-x: auto; }
+  .rail .foot {
+    flex: none;
+    flex-direction: row;
+    align-items: center;
+    margin-top: 0;
+    gap: 12px;
+  }
+  .rail .foot .online,
+  .rail .foot .muted { display: none; }
+  .themeswitch-lbl { display: none; }
+  .nav a span.t { display: none; }
+  .top { padding: 13px 16px; }
+  .wrap { padding: 26px 18px 50px; }
+}

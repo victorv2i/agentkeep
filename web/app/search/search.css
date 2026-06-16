@@ -1,0 +1,50 @@
+/* Search-page additions (snippets, count, recent-notes hint). Co-located with
+   the /search surface; base .search* classes live in globals.css. Reading Room:
+   type + spacing only, no decoration. */
+
+/* Result rows grow a second line (the snippet) — stack instead of one row. */
+.searchres-item.sr-col {
+  flex-direction: column;
+  align-items: stretch;
+  gap: 4px;
+}
+.sr-top {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 14px;
+}
+
+/* One-line context snippet under the title; matched term in the accent. */
+.sr-snippet {
+  font-size: 13px;
+  color: var(--mut);
+  line-height: 1.45;
+  overflow: hidden;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+}
+.sr-match {
+  font-style: normal;
+  font-weight: 500;
+  color: var(--acc);
+}
+
+/* Honest result count ("30 of 95 matches") above the list. */
+.sr-count {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--faint);
+  letter-spacing: 0.5px;
+  margin: 16px 2px 0;
+}
+
+/* "Recent notes" label for the pre-query hint state. */
+.sr-recent {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--faint);
+  letter-spacing: 0.5px;
+  margin: 22px 2px 0;
+}

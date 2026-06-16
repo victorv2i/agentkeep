@@ -1,0 +1,620 @@
+'use client'
+
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import CodeMirror, { type ReactCodeMirrorRef } from '@uiw/react-codemirror'
+import { EditorView, keymap } from '@codemirror/view'
+import { autocompletion } from '@codemirror/autocomplete'
+import { defaultKeymap, history, historyKeymap } from '@codemirror/commands'
+import { extendedMarkdownLanguage } from './editor/wikilink-lang'
+import { livePreview, type WikiLinkParts } from './editor/live-preview'
+import { wikiLinkCompletion } from './editor/wikilink-complete'
+import { inkEditorTheme } from './editor/theme'
+import {
+  listNotesAction,
+  loadNoteAction,
+  saveNoteAction,
+  resolveTargetAction,
+  createNoteAction,
+  noteProvenanceAction,
+  undoNoteCommitAction,
+} from './actions'
+import type { NoteListItem, NoteProvenance } from '@/lib/vault'
+
+type SaveState = 'saved' | 'saving' | 'unsaved' | 'conflict' | 'error'
+
+interface OpenNote {
+  path: string
+  title: string
+  content: string
+  /** baseHash for the CAS — the hash this content was loaded at. */
+  hash: string
+  backlinks: NoteListItem[]
+}
+
+export function NotesClient({
+  initialNotes,
+  initialPath,
+}: {
+  initialNotes: NoteListItem[]
+  /** Optional `/?path=<vault-relative>` deep-link target to open on load. */
+  initialPath?: string
+}) {
+  const [notes, setNotes] = useState<NoteListItem[]>(initialNotes)
+  const [filter, setFilter] = useState('')
+  const [open, setOpen] = useState<OpenNote | null>(null)
+  const [doc, setDoc] = useState('')
+  const [saveState, setSaveState] = useState<SaveState>('saved')
+  // Provenance for the OPEN note (who last edited + recent history) — drives the
+  // "agent edited" badge and the History/Undo panel. Null until loaded.
+  const [prov, setProv] = useState<NoteProvenance | null>(null)
+  const [historyOpen, setHistoryOpen] = useState(false)
+  const [undoingSha, setUndoingSha] = useState<string | null>(null)
+  // An unresolved `[[wikilink]]` the user clicked — shown as a calm in-theme
+  // inline prompt (themed), never a native window.confirm dialog.
+  const [createTarget, setCreateTarget] = useState<string | null>(null)
+
+  const cmRef = useRef<ReactCodeMirrorRef>(null)
+  const saveTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
+  // Latest doc/hash the save loop reads (avoids stale closures in the timer).
+  const docRef = useRef('')
+  const openRef = useRef<OpenNote | null>(null)
+  docRef.current = doc
+  openRef.current = open
+
+  // A synchronous basename set so the live-preview can style resolved vs
+  // placeholder links without an await per render. Refreshed with the note list.
+  const basenames = useMemo(() => {
+    const s = new Set<string>()
+    for (const n of notes) s.add(n.basename.toLowerCase())
+    return s
+  }, [notes])
+  const basenamesRef = useRef(basenames)
+  basenamesRef.current = basenames
+  const isResolved = useCallback((target: string) => {
+    const t = target.replace(/\.md$/i, '').trim().toLowerCase()
+    if (t === '') return false
+    const base = t.includes('/') ? (t.split('/').pop() ?? t) : t
+    return basenamesRef.current.has(base)
+  }, [])
+
+  const notesRef = useRef(notes)
+  notesRef.current = notes
+  const getCompletionNotes = useCallback(
+    () => notesRef.current.map((n) => ({ basename: n.basename, title: n.title })),
+    [],
+  )
+
+  const refreshNotes = useCallback(async () => {
+    setNotes(await listNotesAction())
+  }, [])
+
+  const openNote = useCallback(
+    async (path: string, anchor?: WikiLinkParts['anchor']) => {
+      const loaded = await loadNoteAction(path)
+      if (!loaded) {
+        // Vanished (e.g. deleted out of band) — drop it from the list.
+        await refreshNotes()
+        return
+      }
+      if (saveTimer.current) clearTimeout(saveTimer.current)
+      setOpen({
+        path: loaded.path,
+        title: loaded.title,
+        content: loaded.content,
+        hash: loaded.hash,
+        backlinks: loaded.backlinks,
+      })
+      setDoc(loaded.content)
+      setSaveState('saved')
+      // Load provenance for the badge + history panel. Don't block the editor on
+      // it: clear stale provenance, then fill it in when it lands (ignore a
+      // response for a note we've since navigated away from).
+      setProv(null)
+      setHistoryOpen(false)
+      void noteProvenanceAction(loaded.path).then((p) => {
+        if (openRef.current?.path === loaded.path) setProv(p)
+      })
+      // `[[Note#Heading]]` / `[[Note^block]]`: after the note's content lands,
+      // scroll the editor to the matching line. The CodeMirror view is mounted
+      // by the next paint, so defer one frame.
+      if (anchor) {
+        const target = anchor
+        requestAnimationFrame(() => scrollToAnchor(loaded.content, target))
+      }
+    },
+    [refreshNotes],
+  )
+
+  // Scroll the live editor to the line that hosts a `#heading` or `^block-id`.
+  const scrollToAnchor = useCallback(
+    (content: string, anchor: NonNullable<WikiLinkParts['anchor']>) => {
+      const view = cmRef.current?.view
+      if (!view) return
+      const lines = content.split('\n')
+      const slug = (s: string) => s.trim().toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '')
+      const wanted = slug(anchor.value)
+      let lineNo = -1
+      for (let i = 0; i < lines.length; i++) {
+        const line = lines[i]!
+        if (anchor.kind === 'heading') {
+          const m = /^#{1,6}\s+(.*)$/.exec(line)
+          if (m && slug(m[1]!) === wanted) { lineNo = i; break }
+        } else {
+          // A block anchor `^id` sits at the END of the line it tags.
+          if (new RegExp(`\\^${anchor.value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\s*$`).test(line)) {
+            lineNo = i
+            break
+          }
+        }
+      }
+      if (lineNo < 0) return
+      const pos = view.state.doc.line(lineNo + 1).from
+      view.dispatch({
+        selection: { anchor: pos },
+        effects: EditorView.scrollIntoView(pos, { y: 'start', yMargin: 24 }),
+      })
+    },
+    [],
+  )
+
+  // Save through the CAS. On conflict we DO NOT clobber: keep the user's text,
+  // flip to the conflict state. Backlinks/title refresh on a clean save.
+  const doSave = useCallback(async () => {
+    const cur = openRef.current
+    if (!cur) return
+    const content = docRef.current
+    if (content === cur.content) {
+      setSaveState('saved')
+      return
+    }
+    setSaveState('saving')
+    let res
+    try {
+      res = await saveNoteAction(cur.path, content, cur.hash)
+    } catch {
+      // A non-conflict failure (the action re-throws those): the vault couldn't
+      // be reached or the write failed. Surface it calmly, keep the buffer — the
+      // user can retry by editing again; never let it reject into an overlay.
+      if (openRef.current?.path !== cur.path) return
+      setSaveState('error')
+      return
+    }
+    // The note may have been switched while saving — ignore a stale response.
+    if (openRef.current?.path !== cur.path) return
+    if (res.ok) {
+      const reloaded = await loadNoteAction(cur.path)
+      setOpen((o) =>
+        o && o.path === cur.path
+          ? {
+              ...o,
+              content,
+              hash: res.hash,
+              title: reloaded?.title ?? o.title,
+              backlinks: reloaded?.backlinks ?? o.backlinks,
+            }
+          : o,
+      )
+      setSaveState(docRef.current === content ? 'saved' : 'unsaved')
+      await refreshNotes()
+      // A clean save is a new human commit — refresh provenance so the badge +
+      // history reflect "you edited" now (still ignore a stale-note response).
+      void noteProvenanceAction(cur.path).then((p) => {
+        if (openRef.current?.path === cur.path) setProv(p)
+      })
+    } else {
+      // ConflictError: the file changed under us (likely the agent). Surface it,
+      // keep the buffer — the user reloads to merge, never silently overwritten.
+      setSaveState('conflict')
+    }
+  }, [refreshNotes])
+
+  const onChange = useCallback((value: string) => {
+    setDoc(value)
+    const cur = openRef.current
+    if (!cur) return
+    setSaveState((s) => (s === 'conflict' ? 'conflict' : value === cur.content ? 'saved' : 'unsaved'))
+    if (saveTimer.current) clearTimeout(saveTimer.current)
+    // Debounced autosave; a conflict pauses autosave until the user reloads.
+    saveTimer.current = setTimeout(() => {
+      if (saveStateNotConflict()) void doSave()
+    }, 1200)
+  }, [doSave])
+
+  // Read latest save state without a dep (the timer closure is created fresh).
+  const saveStateRef = useRef<SaveState>('saved')
+  saveStateRef.current = saveState
+  const saveStateNotConflict = () => saveStateRef.current !== 'conflict'
+
+  // Clicking a `[[wikilink]]` (or `![[embed]]`): open it if it resolves —
+  // scrolling to its `#heading`/`^block` anchor if present — else surface an
+  // in-theme inline prompt to create it (no native dialog). (The alias, if any,
+  // doesn't change which note we navigate to.)
+  const onWikiLinkClick = useCallback(
+    async (parts: WikiLinkParts) => {
+      const resolved = await resolveTargetAction(parts.target)
+      if (resolved) {
+        await openNote(resolved, parts.anchor)
+        return
+      }
+      setCreateTarget(parts.target)
+    },
+    [openNote],
+  )
+  const onWikiLinkClickRef = useRef(onWikiLinkClick)
+  onWikiLinkClickRef.current = onWikiLinkClick
+
+  // Clicking a plain markdown `[text](url)` link. External (`http(s)`/`mailto:`)
+  // opens in a new tab; an internal/relative target resolves like a wikilink
+  // (open the note, or prompt to create it).
+  const onMarkdownLinkClick = useCallback(
+    async (url: string) => {
+      if (/^https?:\/\//i.test(url) || url.startsWith('mailto:')) {
+        window.open(url, '_blank', 'noopener,noreferrer')
+        return
+      }
+      // Relative/internal: strip a hash anchor, decode `%20`, resolve by basename.
+      const hash = url.indexOf('#')
+      const target = decodeURIComponent((hash === -1 ? url : url.slice(0, hash)).replace(/\.md$/i, ''))
+      const anchor = hash === -1 ? null : { kind: 'heading' as const, value: url.slice(hash + 1) }
+      const resolved = await resolveTargetAction(target)
+      if (resolved) {
+        await openNote(resolved, anchor)
+        return
+      }
+      setCreateTarget(target)
+    },
+    [openNote],
+  )
+  const onMarkdownLinkClickRef = useRef(onMarkdownLinkClick)
+  onMarkdownLinkClickRef.current = onMarkdownLinkClick
+
+  // Confirm/cancel the inline create-prompt.
+  const confirmCreate = useCallback(async () => {
+    const target = createTarget
+    if (!target) return
+    setCreateTarget(null)
+    const path = await createNoteAction(target)
+    await refreshNotes()
+    await openNote(path)
+  }, [createTarget, openNote, refreshNotes])
+
+  // Undo ONE agent-authored commit on the open note. The server reverts that
+  // commit (a new human commit), re-reads the note (fresh content + hash so the
+  // CAS stays correct), and returns the refreshed provenance. We swap the buffer
+  // to the reverted content and refresh the panel. Offered only on agent rows.
+  const undoCommit = useCallback(
+    async (sha: string) => {
+      const cur = openRef.current
+      if (!cur || undoingSha) return
+      setUndoingSha(sha)
+      try {
+        const res = await undoNoteCommitAction(cur.path, sha)
+        // Ignore a response for a note we've navigated away from.
+        if (openRef.current?.path !== cur.path) return
+        if (!res.ok) {
+          // Stale/agent-only guard tripped — refresh provenance so the panel
+          // reflects reality, surface nothing scary.
+          const p = await noteProvenanceAction(cur.path)
+          if (openRef.current?.path === cur.path) setProv(p)
+          return
+        }
+        if (saveTimer.current) clearTimeout(saveTimer.current)
+        setOpen((o) =>
+          o && o.path === cur.path
+            ? {
+                ...o,
+                content: res.note.content,
+                hash: res.note.hash,
+                title: res.note.title,
+                backlinks: res.note.backlinks,
+              }
+            : o,
+        )
+        setDoc(res.note.content)
+        setSaveState('saved')
+        setProv(res.provenance)
+        await refreshNotes()
+      } finally {
+        setUndoingSha(null)
+      }
+    },
+    [refreshNotes, undoingSha],
+  )
+
+  useEffect(() => {
+    return () => {
+      if (saveTimer.current) clearTimeout(saveTimer.current)
+    }
+  }, [])
+
+  // Deep-link: `/?path=<vault-relative path>` opens that note on load (the
+  // graph view and search results navigate here). The server page passes the
+  // param down as `initialPath`; each distinct value is handled once. A bad or
+  // vanished path falls through to the normal vault home (openNote already
+  // drops missing notes; a hostile path rejects server-side — swallow it).
+  const handledInitialPath = useRef<string | null>(null)
+  useEffect(() => {
+    if (!initialPath || handledInitialPath.current === initialPath) return
+    handledInitialPath.current = initialPath
+    openNote(initialPath).catch(() => {
+      // VaultPathError etc. from the server action — ignore, keep the home calm.
+    })
+  }, [initialPath, openNote])
+
+  const extensions = useMemo(
+    () => [
+      extendedMarkdownLanguage(),
+      history(),
+      keymap.of([...defaultKeymap, ...historyKeymap]),
+      EditorView.lineWrapping,
+      autocompletion({ override: [wikiLinkCompletion(getCompletionNotes)] }),
+      livePreview({
+        onWikiLink: (parts) => {
+          void onWikiLinkClickRef.current(parts)
+        },
+        onMarkdownLink: (url) => {
+          void onMarkdownLinkClickRef.current(url)
+        },
+        isResolved,
+        getView: () => cmRef.current?.view ?? null,
+        getTitle: () => openRef.current?.title ?? '',
+      }),
+      inkEditorTheme(),
+    ],
+    [getCompletionNotes, isResolved],
+  )
+
+  const filtered = useMemo(() => {
+    const q = filter.trim().toLowerCase()
+    if (q === '') return notes
+    return notes.filter((n) => n.title.toLowerCase().includes(q))
+  }, [notes, filter])
+
+  return (
+    <div className="notes">
+      <aside className="notelist">
+        <input
+          className="notefilter"
+          type="text"
+          placeholder="Filter notes"
+          value={filter}
+          onChange={(e) => setFilter(e.target.value)}
+          aria-label="Filter notes"
+        />
+        <div className="notelist-scroll">
+          {filtered.map((n) => (
+            <button
+              key={n.path}
+              type="button"
+              className={open?.path === n.path ? 'noteitem cur' : 'noteitem'}
+              title={n.tooltip}
+              onClick={() => void openNote(n.path)}
+            >
+              {n.title}
+            </button>
+          ))}
+        </div>
+      </aside>
+
+      <section className="editorpane">
+        {createTarget ? (
+          <div className="createprompt" role="dialog" aria-label="Create note">
+            <span className="cp-text">
+              “{createTarget}” isn’t a note yet. Create it?
+            </span>
+            <span className="cp-acts">
+              <button type="button" className="cp-ok" onClick={() => void confirmCreate()}>
+                Create
+              </button>
+              <button type="button" className="cp-no" onClick={() => setCreateTarget(null)}>
+                Cancel
+              </button>
+            </span>
+          </div>
+        ) : null}
+        {open ? (
+          <>
+            <header className="editorhead">
+              <h1>{open.title}</h1>
+              {prov?.lastAuthor === 'agent' ? (
+                <span
+                  className="provbadge agent"
+                  title="The agent made the most recent change to this note."
+                >
+                  agent edited
+                  {prov.lastEditISO ? (
+                    <span className="provtime"> · {relativeTime(prov.lastEditISO)}</span>
+                  ) : null}
+                </span>
+              ) : null}
+              {prov && prov.history.length > 0 ? (
+                <button
+                  type="button"
+                  className={historyOpen ? 'histbtn open' : 'histbtn'}
+                  onClick={() => setHistoryOpen((v) => !v)}
+                  aria-expanded={historyOpen}
+                  aria-label="Note history"
+                >
+                  History
+                </button>
+              ) : null}
+              <SaveBadge state={saveState} onReload={() => void openNote(open.path)} />
+            </header>
+            {historyOpen && prov ? (
+              <HistoryPanel
+                prov={prov}
+                undoingSha={undoingSha}
+                onUndo={(sha) => void undoCommit(sha)}
+                onClose={() => setHistoryOpen(false)}
+              />
+            ) : null}
+            {saveState === 'conflict' ? (
+              <div className="conflictnote" role="status">
+                This note changed since you opened it. Reload to merge; your text is
+                kept.{' '}
+                <button type="button" onClick={() => void openNote(open.path)}>
+                  Reload
+                </button>
+              </div>
+            ) : null}
+            <div className="editorbox">
+              <CodeMirror
+                ref={cmRef}
+                value={doc}
+                onChange={onChange}
+                onBlur={() => {
+                  if (saveStateNotConflict()) void doSave()
+                }}
+                extensions={extensions}
+                basicSetup={false}
+                theme="none"
+                height="100%"
+              />
+            </div>
+            {open.backlinks.length > 0 ? (
+              <div className="backlinks">
+                <div className="backlinks-lbl">
+                  <span className="dot" />
+                  <span className="lbl">
+                    Linked from · {open.backlinks.length}
+                  </span>
+                </div>
+                {open.backlinks.map((b) => (
+                  <button
+                    key={b.path}
+                    type="button"
+                    className="backlink"
+                    onClick={() => void openNote(b.path)}
+                  >
+                    {b.title}
+                  </button>
+                ))}
+              </div>
+            ) : null}
+          </>
+        ) : (
+          <div className="editorempty">
+            <div className="ee-card">
+              <span className="ee-star" aria-hidden="true">
+                <svg width="46" height="12" viewBox="0 0 46 12" fill="none">
+                  <path d="M2 6H18" stroke="currentColor" strokeWidth="1" strokeLinecap="round" />
+                  <path d="M28 6H44" stroke="currentColor" strokeWidth="1" strokeLinecap="round" />
+                  <path d="M23 2.5 26 6 23 9.5 20 6Z" fill="currentColor" />
+                </svg>
+              </span>
+              <p className="ee-title">Your vault</p>
+              <p className="ee-sub">Pick a note on the left, or let your agent keep it for you.</p>
+              <div className="ee-links">
+                <a className="ee-link" href="/settings">Connect your agent →</a>
+                <a className="ee-link" href="/memory">What it believes →</a>
+              </div>
+            </div>
+          </div>
+        )}
+      </section>
+    </div>
+  )
+}
+
+/** "just now" / "5m ago" / "3h ago" / "2d ago" / a date — calm, no seconds. */
+function relativeTime(iso: string): string {
+  const then = new Date(iso).getTime()
+  if (Number.isNaN(then)) return ''
+  const sec = Math.max(0, Math.round((Date.now() - then) / 1000))
+  if (sec < 45) return 'just now'
+  const min = Math.round(sec / 60)
+  if (min < 60) return `${min}m ago`
+  const hr = Math.round(min / 60)
+  if (hr < 24) return `${hr}h ago`
+  const day = Math.round(hr / 24)
+  if (day < 7) return `${day}d ago`
+  return new Date(iso).toLocaleDateString(undefined, { month: 'short', day: 'numeric' })
+}
+
+/** A human action label for a note-history row (the path is always the open note). */
+function historyAction(message: string): string {
+  const m = message.replace(/^(agent|human):\s*/, '').trim()
+  const verb = m.split(/\s+/)[0]?.toLowerCase()
+  if (verb === 'write') return 'Wrote this note'
+  if (verb === 'delete') return 'Removed this note'
+  if (verb === 'revert') return 'Reverted a change'
+  return m
+}
+
+/**
+ * The open note's recent commit history with per-row author chips. Each
+ * agent-authored row gets an Undo button (reverts THAT commit as a new human
+ * commit — itself reversible); human rows are read-only, so a human's own change
+ * is never offered up for a silent revert. Calm + out of the way (an affordance,
+ * not a wall); the 7-char sha is a muted detail, never the primary UI.
+ */
+function HistoryPanel({
+  prov,
+  undoingSha,
+  onUndo,
+  onClose,
+}: {
+  prov: NoteProvenance
+  undoingSha: string | null
+  onUndo: (sha: string) => void
+  onClose: () => void
+}) {
+  return (
+    <div className="histpanel" role="dialog" aria-label="Note history">
+      <div className="histhead">
+        <span className="histlbl">History · {prov.history.length}</span>
+        <button type="button" className="histclose" onClick={onClose} aria-label="Close history">
+          ✕
+        </button>
+      </div>
+      <div className="histrows">
+        {prov.history.map((h) => {
+          const isAgent = h.author === 'agent'
+          const busy = undoingSha === h.sha
+          return (
+            <div className="histrow" key={h.sha}>
+              <span className={isAgent ? 'authchip agent' : 'authchip human'}>
+                {isAgent ? 'agent' : 'you'}
+              </span>
+              <div className="histbody">
+                <div className="histmsg">{historyAction(h.message)}</div>
+                <div className="histmeta">
+                  {relativeTime(h.dateISO)} · <span className="histsha">{h.sha.slice(0, 7)}</span>
+                </div>
+              </div>
+              {isAgent ? (
+                <button
+                  type="button"
+                  className="histundo"
+                  onClick={() => onUndo(h.sha)}
+                  disabled={undoingSha !== null}
+                  aria-busy={busy}
+                >
+                  {busy ? '↺ Undoing…' : '↺ Undo'}
+                </button>
+              ) : null}
+            </div>
+          )
+        })}
+      </div>
+    </div>
+  )
+}
+
+function SaveBadge({ state, onReload }: { state: SaveState; onReload: () => void }) {
+  const map: Record<SaveState, string> = {
+    saved: 'Saved',
+    saving: 'Saving…',
+    unsaved: 'Unsaved',
+    conflict: 'Changed elsewhere',
+    error: 'Save failed',
+  }
+  if (state === 'conflict') {
+    return (
+      <button type="button" className="savebadge conflict" onClick={onReload}>
+        {map[state]}
+      </button>
+    )
+  }
+  return <span className={`savebadge ${state}`}>{map[state]}</span>
+}
