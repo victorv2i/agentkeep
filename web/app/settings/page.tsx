@@ -5,6 +5,18 @@ import { getUser, getConnectFacts, getActiveVaultInfo } from '@/lib/vault'
 
 export const dynamic = 'force-dynamic'
 
+function shellQuote(value: string): string {
+  return "'" + value.replace(/'/g, "'\\''") + "'"
+}
+
+function shellJoin(parts: string[]): string {
+  return parts.map(shellQuote).join(' ')
+}
+
+function yamlQuote(value: string): string {
+  return JSON.stringify(value)
+}
+
 /**
  * Settings → "Connect your agent". The front door for the BYO-agent seam: point
  * a Hermes / OpenClaw / any MCP or file agent at this vault, one step, real commands.
@@ -27,34 +39,44 @@ export default async function SettingsPage() {
   const { vaultPath, binPath } = facts
 
   // The command an MCP client spawns. `agentkeep-mcp` is on PATH once the package
-  // is built + linked (pnpm exposes it via node_modules/.bin); otherwise we fall
-  // back to invoking the built file directly, which always works from the repo.
-  const launcher = binPath && binPath.endsWith('.js') ? `node ${binPath}` : 'agentkeep-mcp'
-  const serveCommand = `${launcher} ${vaultPath}`
+  // is built + linked (pnpm exposes it via node_modules/.bin). Prefer the real
+  // resolved executable path when available so spaces in checkout paths do not
+  // rely on a user's PATH. A compiled JS file is invoked through node.
+  const mcpCommand = binPath ? (binPath.endsWith('.js') ? 'node' : binPath) : 'agentkeep-mcp'
+  const mcpArgs = binPath?.endsWith('.js') ? [binPath, vaultPath] : [vaultPath]
+  const serveCommand = shellJoin([mcpCommand, ...mcpArgs])
 
-  // OpenClaw reads the standard `mcpServers` map from `openclaw.json`.
-  const mcpServersJson = (extra: string) =>
-    `{
-  "mcpServers": {
-    "agentkeep": {
-      "command": "${launcher.split(' ')[0]}",
-      "args": [${launcher.includes(' ') ? `"${binPath}", ` : ''}"${vaultPath}"]${extra}
-    }
-  }
-}`
-
-  const openClawJson = mcpServersJson(',\n      "transport": "stdio"')
+  // OpenClaw reads the standard `mcpServers` map from `openclaw.json`. Let
+  // JSON.stringify do all string escaping for paths, quotes, and backslashes.
+  const openClawJson = JSON.stringify(
+    {
+      mcpServers: {
+        agentkeep: {
+          command: mcpCommand,
+          args: mcpArgs,
+          transport: 'stdio',
+        },
+      },
+    },
+    null,
+    2,
+  )
 
   // Hermes reads `~/.hermes/config.yaml` under `mcp_servers:` (stdio: command +
-  // args). This is the real shape from the installed Hermes config + docs/mcp.md.
+  // args). Double-quoted YAML scalars keep spaces, quotes, and backslashes safe.
   const hermesYaml = `mcp_servers:
   agentkeep:
-    command: ${launcher.split(' ')[0]}
-    args: [${launcher.includes(' ') ? `"${binPath}", ` : ''}"${vaultPath}"]`
+    command: ${yamlQuote(mcpCommand)}
+    args:
+${mcpArgs.map((arg) => `      - ${yamlQuote(arg)}`).join('\n')}`
 
-  const hermesCli = launcher.includes(' ')
-    ? `hermes mcp add agentkeep --command node --args ${binPath} ${vaultPath}`
-    : `hermes mcp add agentkeep --command agentkeep-mcp --args ${vaultPath}`
+  const hermesCli = `hermes mcp add agentkeep --command ${shellQuote(mcpCommand)} --args ${mcpArgs
+    .map(shellQuote)
+    .join(' ')}`
+
+  const mcpProbeScript =
+    'const msgs=[{jsonrpc:"2.0",id:1,method:"initialize",params:{protocolVersion:"2025-06-18",capabilities:{},clientInfo:{name:"agentkeep-smoke",version:"0"}}},{jsonrpc:"2.0",method:"notifications/initialized",params:{}},{jsonrpc:"2.0",id:2,method:"tools/list",params:{}}];for(const m of msgs){const body=JSON.stringify(m);process.stdout.write("Content-Length: "+Buffer.byteLength(body)+"\\r\\n\\r\\n"+body)}'
+  const smokeTest = `${shellJoin(['node', '-e', mcpProbeScript])} | timeout 5s ${serveCommand} | grep -E '"(capture|remember|list_notes)"'`
 
   return (
     <Shell user={user}>
@@ -73,6 +95,19 @@ export default async function SettingsPage() {
           activePath={vaultInfo.activePath}
           recentVaults={vaultInfo.recentVaults}
         />
+
+        <section className="connect-sec">
+          <span className="lbl">Local access</span>
+          <div className="keybadge off">
+            <span className="keydot" />
+            <span className="keytext">
+              <b>No login wall:</b> Agentkeep is a local, single-user app. Anyone
+              who can reach this web server can read and edit the active vault.
+              Keep it on localhost or a private tailnet. Your notes and app state
+              stay on this machine.
+            </span>
+          </div>
+        </section>
 
         {/* The vault + the one command. */}
         <section className="connect-sec">
@@ -114,6 +149,25 @@ export default async function SettingsPage() {
             <b>Give your agent the routine →</b>{' '}
             <code className="inlinecode">AGENT-ROUTINE.md</code> (repo root).
             Paste it as a system prompt or Hermes skill.
+          </p>
+        </section>
+
+        <section className="connect-sec">
+          <span className="lbl">MCP smoke test</span>
+          <p className="connect-note">
+            This sends an MCP initialize request and a <code className="inlinecode">tools/list</code>{' '}
+            request over stdio. A working server prints tool names such as{' '}
+            <code className="inlinecode">capture</code>,{' '}
+            <code className="inlinecode">remember</code>, and{' '}
+            <code className="inlinecode">list_notes</code>.
+          </p>
+          <CopyBlock code={smokeTest} label="tools/list probe" />
+          <p className="connect-sub sub">
+            If it fails: run <code className="inlinecode">pnpm -w build</code>,
+            confirm the vault path exists, make sure your MCP client uses stdio,
+            and keep server logs on stderr so stdout stays reserved for JSON-RPC.
+            If your shell has no <code className="inlinecode">timeout</code>,
+            omit that word and stop the command after the response.
           </p>
         </section>
 

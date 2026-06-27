@@ -52,8 +52,9 @@ export class Indexer {
       this.search_.upsert(meta)
     } catch (err) {
       // Same guard as reindexAll: a direct caller (CLI/MCP) must not get a throw
-      // on one bad file. The watcher already swallows, but the method itself is
-      // now safe too.
+      // on one bad file. Since this is an incremental refresh, remove any stale
+      // prior entry for this path before skipping it.
+      this.removeFile(relPath)
       console.warn(`agentkeep: skipped unindexable ${relPath}:`, (err as Error).message)
     }
   }

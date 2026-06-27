@@ -19,20 +19,30 @@
   ],
   "type": "module",
   "publishConfig": { "access": "public" },
-  "files": ["dist", "src", "README.md", "LICENSE", "SPEC.md", "AGENT-ROUTINE.md"],
+  "files": [
+    "dist/**/*.js",
+    "dist/**/*.d.ts",
+    "!dist/**/*.test.*",
+    "README.md",
+    "LICENSE",
+    "SPEC.md",
+    "AGENT-ROUTINE.md",
+    "docs/*.png"
+  ],
   "engines": {
     "node": ">=22"
   },
   "main": "./dist/core/index.js",
-  "types": "./src/core/index.ts",
+  "types": "./dist/core/index.d.ts",
   "exports": {
     ".": {
-      "types": "./src/core/index.ts",
+      "types": "./dist/core/index.d.ts",
       "default": "./dist/core/index.js"
     }
   },
   "scripts": {
-    "build": "tsc",
+    "clean": "node -e \"require('node:fs').rmSync('dist',{recursive:true,force:true})\"",
+    "build": "pnpm clean && tsc",
     "prepublishOnly": "pnpm build",
     "test": "vitest run",
     "test:watch": "vitest",

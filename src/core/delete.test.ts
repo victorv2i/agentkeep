@@ -1,10 +1,14 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest'
+import { execFile } from 'node:child_process'
 import { mkdtemp, rm, readFile, writeFile, mkdir, symlink } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { dirname, join } from 'node:path'
+import { promisify } from 'node:util'
 import { openVault, type Agentkeep } from './index.js'
 import { deleteNote } from './delete.js'
 import { VaultPathError } from './errors.js'
+
+const execFileP = promisify(execFile)
 
 let dir: string
 let ak: Agentkeep
@@ -14,6 +18,20 @@ beforeEach(async () => {
   ak = await openVault(dir)
 })
 afterEach(async () => { await rm(dir, { recursive: true, force: true }) })
+
+async function gitStatusFor(relPath: string): Promise<string> {
+  const { stdout } = await execFileP('git', ['-C', dir, 'status', '--porcelain', '--', relPath])
+  return String(stdout)
+}
+
+async function lockHeadRef(): Promise<string> {
+  const { stdout } = await execFileP('git', ['-C', dir, 'symbolic-ref', '--quiet', 'HEAD'])
+  const ref = String(stdout).trim()
+  const lock = join(dir, '.git', ...ref.split('/')) + '.lock'
+  await mkdir(dirname(lock), { recursive: true })
+  await writeFile(lock, 'stale lock\n', 'utf8')
+  return lock
+}
 
 describe('deleteNote (core delete path)', () => {
   it('removes an existing note from disk and commits the deletion as the agent', async () => {
@@ -88,5 +106,24 @@ describe('deleteNote (core delete path)', () => {
     const res = await deleteNote(ak.core, 'inbox/cap_z.md', hash)
     expect(res.ok).toBe(true)
     expect(await ak.core.read('inbox/cap_z.md')).toBeNull()
+  })
+
+  it('a commit failure mid-delete does not leave the working file gone-from-disk', async () => {
+    // `git rm` unlinks + stages the removal BEFORE the commit. A stale branch
+    // ref lock makes only the commit throw; delete must restore the disk bytes
+    // and unstage the deletion.
+    const content = '# keep me\n'
+    await ak.core.write('inbox/cap_fail.md', content, { author: 'human', baseHash: null })
+    const lock = await lockHeadRef()
+
+    try {
+      await expect(deleteNote(ak.core, 'inbox/cap_fail.md')).rejects.toThrow()
+    } finally {
+      await rm(lock, { force: true })
+    }
+
+    expect(await readFile(join(dir, 'inbox/cap_fail.md'), 'utf8')).toBe(content)
+    expect(await ak.core.read('inbox/cap_fail.md')).not.toBeNull()
+    expect(await gitStatusFor('inbox/cap_fail.md')).toBe('')
   })
 })

@@ -7,7 +7,19 @@
 // revalidate every surface so the whole app re-renders against the new vault.
 
 import { revalidatePath } from 'next/cache'
-import { setActiveVault, type SetVaultResult } from '@/lib/vault'
+import {
+  preflightActiveVault,
+  setActiveVault,
+  type SetVaultResult,
+  type VaultPreflightResult,
+} from '@/lib/vault'
+
+export type { VaultPreflightResult }
+
+/** Read-only validation + side-effect preview before opening a vault folder. */
+export async function preflightVaultAction(path: string): Promise<VaultPreflightResult> {
+  return preflightActiveVault(path)
+}
 
 /** Open / switch to the vault folder at `path`, then refresh the whole app. */
 export async function setActiveVaultAction(path: string): Promise<SetVaultResult> {

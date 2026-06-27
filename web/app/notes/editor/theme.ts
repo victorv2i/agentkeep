@@ -47,6 +47,11 @@ const editorTheme = EditorView.theme(
       borderBottom: '1px solid rgba(var(--accg),0.35)',
     },
     '.cm-wikilink:hover': { borderBottomColor: ACCENT },
+    '.cm-wikilink:focus-visible, .cm-lp-link:focus-visible, .cm-lp-embed:focus-visible': {
+      outline: '2px solid var(--acc)',
+      outlineOffset: '3px',
+      borderRadius: '3px',
+    },
     // An unresolved (uncreated) link reads as a placeholder — dimmer + dashed.
     '.cm-wikilink-new': {
       color: FAINT,
@@ -100,6 +105,10 @@ const editorTheme = EditorView.theme(
       verticalAlign: '-2px',
       width: '14px',
       height: '14px',
+    },
+    '.cm-lp-checkbox input:focus-visible': {
+      outline: '2px solid var(--acc)',
+      outlineOffset: '3px',
     },
     '.cm-lp-task-done': { color: FAINT, textDecoration: 'line-through' },
 

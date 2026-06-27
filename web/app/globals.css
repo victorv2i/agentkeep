@@ -26,7 +26,13 @@
   --faint: #8C8068;        /* quietest tier — still clears WCAG-AA on small labels */
   --line: #352E24;
   --line-2: #473E30;
-  --green: #82C79E;        /* success only */
+  --success: #82C79E;      /* success only */
+  --successg: 130, 199, 158;
+  --warn: #F0B66C;
+  --warng: 240, 182, 108;
+  --danger: #F08C84;
+  --dangerg: 240, 140, 132;
+  --green: var(--success); /* legacy alias */
 
   /* depth cues — a warm lamp glow, never cold neon */
   --bg-glow: radial-gradient(120% 80% at 50% -8%, rgba(199, 158, 92, 0.07), transparent 56%);
@@ -54,7 +60,13 @@
   --faint: #756B57;        /* quietest tier — still clears WCAG-AA on small labels */
   --line: #E4DAC6;         /* warm hairline */
   --line-2: #D6CAB2;
-  --green: #2F7D54;
+  --success: #2F7D54;
+  --successg: 47, 125, 84;
+  --warn: #815300;
+  --warng: 129, 83, 0;
+  --danger: #B13B35;
+  --dangerg: 177, 59, 53;
+  --green: var(--success);
 
   --bg-glow: radial-gradient(120% 80% at 50% -10%, rgba(255, 252, 244, 0.6), transparent 60%);
   --lift: inset 0 1px 0 rgba(255, 255, 255, 0.6);
@@ -72,6 +84,7 @@ body {
 }
 
 body {
+  min-height: 100dvh;
   background: var(--bg-glow), var(--space);
   background-attachment: fixed;
   color: var(--ink);
@@ -90,6 +103,36 @@ body {
 :focus-visible {
   outline: 2px solid var(--acc);
   outline-offset: 2px;
+}
+
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+.skiplink {
+  position: fixed;
+  top: max(10px, env(safe-area-inset-top));
+  left: max(10px, env(safe-area-inset-left));
+  z-index: 1000;
+  transform: translateY(-160%);
+  color: var(--space);
+  background: var(--acc);
+  border: 1px solid var(--acc);
+  border-radius: 3px;
+  padding: 9px 13px;
+  font-weight: 700;
+  text-decoration: none;
+}
+.skiplink:focus-visible {
+  transform: translateY(0);
 }
 
 /* ===== motion (restrained; physics only, never decoration) ===== */
@@ -156,8 +199,15 @@ body {
   display: grid;
   grid-template-columns: 226px 1fr;
   min-height: 100vh;
+  min-height: 100dvh;
   max-width: 1180px;
   margin: 0 auto;
+}
+main {
+  min-width: 0;
+}
+main:focus {
+  outline: none;
 }
 .rail {
   padding: 26px 18px;
@@ -189,6 +239,7 @@ body {
   gap: 8px;
   margin-top: -16px;
   padding: 7px 11px;
+  min-height: 44px;
   border-radius: 3px;
   text-decoration: none;
   background: var(--panel);
@@ -221,6 +272,7 @@ body {
   align-items: center;
   gap: 11px;
   padding: 9px 11px;
+  min-height: 44px;
   color: var(--mut);
   text-decoration: none;
   font-weight: 500;
@@ -274,6 +326,7 @@ body {
   gap: 9px;
   background: none;
   border: none;
+  min-height: 44px;
   padding: 0;
   cursor: pointer;
   color: var(--mut);
@@ -372,8 +425,8 @@ body {
   to { opacity: 1; }
 }
 .topnote-icon { flex: none; margin-top: 1px; }
-.topnote.ok .topnote-icon { color: var(--green); }
-.topnote.err { color: #C0564E; } /* error red — reads on cream + espresso */
+.topnote.ok .topnote-icon { color: var(--success); }
+.topnote.err { color: var(--danger); }
 .topnote-snip { font-style: italic; color: var(--ink); }
 .kbd {
   font-family: var(--font-mono);
@@ -382,6 +435,8 @@ body {
   border: 1px solid var(--line-2);
   border-radius: 2px;
   padding: 3px 7px;
+  min-width: 44px;
+  min-height: 44px;
   color: var(--mut);
   cursor: pointer;
 }
@@ -430,6 +485,37 @@ body {
   font-size: 13px;
   margin: 16px 2px 0;
 }
+.searcherror {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin: 16px 0 0;
+  padding: 12px 14px;
+  color: var(--ink);
+  background: rgba(var(--dangerg), 0.1);
+  border: 1px solid rgba(var(--dangerg), 0.38);
+  border-radius: 3px;
+}
+.searcherror p {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+.searcherror button {
+  flex: none;
+  min-height: 40px;
+  color: var(--danger);
+  background: var(--panel);
+  border: 1px solid rgba(var(--dangerg), 0.45);
+  border-radius: 3px;
+  padding: 0 13px;
+  cursor: pointer;
+  font-weight: 700;
+}
+.searcherror button:hover {
+  color: var(--ink);
+  border-color: rgba(var(--dangerg), 0.62);
+}
 .searchres {
   list-style: none;
   margin: 16px 0 0;
@@ -441,6 +527,7 @@ body {
   justify-content: space-between;
   gap: 14px;
   padding: 11px 13px;
+  min-height: 44px;
   border-top: 1px solid var(--line);
   color: var(--ink);
   text-decoration: none;
@@ -462,6 +549,7 @@ body {
   display: grid;
   grid-template-columns: 248px 1fr;
   height: calc(100vh - 60px); /* viewport minus the topbar */
+  height: calc(100dvh - 60px);
   min-height: 0;
 }
 .notelist {
@@ -494,6 +582,8 @@ body {
   min-height: 0;
 }
 .noteitem {
+  display: flex;
+  align-items: center;
   text-align: left;
   background: none;
   border: none;
@@ -501,6 +591,7 @@ body {
   font-family: var(--font-geist), system-ui, sans-serif;
   font-size: 14px;
   padding: 8px 11px;
+  min-height: 44px;
   border-radius: 3px;
   cursor: pointer;
   line-height: 1.35;
@@ -522,19 +613,27 @@ body {
 .editorhead {
   display: flex;
   align-items: center;
+  flex-wrap: wrap;
   gap: 14px;
   padding: 22px 36px 12px;
 }
 .editorhead h1 {
   flex: 1;
+  min-width: 180px;
   font-family: var(--font-display);
   font-weight: 500;
   font-size: 26px;
   letter-spacing: 0;
   color: var(--ink);
   margin: 0;
+  overflow-wrap: anywhere;
 }
+.savestatus { display: inline-flex; }
 .savebadge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 30px;
   font-family: var(--font-mono);
   font-size: 10px;
   letter-spacing: 1.5px;
@@ -544,13 +643,20 @@ body {
   border-radius: 2px;
   padding: 4px 9px;
   white-space: nowrap;
+  background: none;
 }
 .savebadge.saving { color: var(--acc); border-color: rgba(var(--accg), 0.3); }
-.savebadge.unsaved { color: var(--acc-2); border-color: rgba(var(--accg), 0.3); }
+.savebadge.unsaved { color: var(--warn); border-color: rgba(var(--warng), 0.4); }
 .savebadge.conflict {
-  color: #f0b27a;
-  border-color: rgba(240, 178, 122, 0.45);
-  background: rgba(240, 178, 122, 0.08);
+  color: var(--warn);
+  border-color: rgba(var(--warng), 0.48);
+  background: rgba(var(--warng), 0.1);
+  cursor: pointer;
+}
+.savebadge.error {
+  color: var(--danger);
+  border-color: rgba(var(--dangerg), 0.48);
+  background: rgba(var(--dangerg), 0.1);
   cursor: pointer;
 }
 .conflictnote {
@@ -558,16 +664,36 @@ body {
   padding: 10px 14px;
   font-size: 13px;
   color: var(--ink);
-  background: rgba(240, 178, 122, 0.08);
-  border: 1px solid rgba(240, 178, 122, 0.35);
+  background: rgba(var(--warng), 0.1);
+  border: 1px solid rgba(var(--warng), 0.4);
   border-radius: 3px;
 }
 .conflictnote button {
   margin-left: 6px;
   background: none;
   border: none;
-  color: #f0b27a;
+  color: var(--warn);
   font-weight: 600;
+  cursor: pointer;
+  font-size: 13px;
+}
+.savenote {
+  margin: 0 36px 6px;
+  padding: 10px 14px;
+  font-size: 13px;
+  color: var(--ink);
+  border-radius: 3px;
+}
+.savenote.error {
+  background: rgba(var(--dangerg), 0.1);
+  border: 1px solid rgba(var(--dangerg), 0.4);
+}
+.savenote button {
+  margin-left: 6px;
+  background: none;
+  border: none;
+  color: var(--danger);
+  font-weight: 700;
   cursor: pointer;
   font-size: 13px;
 }
@@ -594,9 +720,44 @@ body {
   background: none;
   border: none;
   cursor: pointer;
+  min-height: 36px;
+  padding: 0 4px;
 }
 .createprompt .cp-ok { color: var(--acc-2); }
 .createprompt .cp-no { color: var(--faint); }
+.memoryguard {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  margin: 0 36px 8px;
+  padding: 12px 14px;
+  color: var(--ink);
+  background: rgba(var(--warng), 0.1);
+  border: 1px solid rgba(var(--warng), 0.4);
+  border-radius: 3px;
+  font-size: 13px;
+}
+.memoryguard-text {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.memoryguard strong {
+  color: var(--warn);
+  font-weight: 700;
+}
+.memoryguard button {
+  flex: none;
+  min-height: 40px;
+  color: var(--space);
+  background: var(--warn);
+  border: 1px solid var(--warn);
+  border-radius: 3px;
+  padding: 0 13px;
+  cursor: pointer;
+  font-weight: 700;
+}
+.memoryguard button:hover { opacity: 0.86; }
 .editorbox {
   flex: 1;
   min-height: 0;
@@ -656,12 +817,15 @@ body {
   background: var(--acc-2);
 }
 .backlink {
+  display: inline-flex;
+  align-items: center;
   text-align: left;
   background: none;
   border: none;
   color: var(--acc-2);
   font-family: var(--font-geist), system-ui, sans-serif;
   font-size: 13.5px;
+  min-height: 36px;
   padding: 2px 0;
   cursor: pointer;
   width: fit-content;
@@ -693,6 +857,7 @@ body {
   border: 1px solid var(--line);
   border-radius: 2px;
   padding: 4px 9px;
+  min-height: 36px;
   background: none;
   cursor: pointer;
   white-space: nowrap;
@@ -728,6 +893,8 @@ body {
   cursor: pointer;
   font-size: 13px;
   line-height: 1;
+  min-width: 36px;
+  min-height: 36px;
   padding: 2px 4px;
 }
 .histclose:hover { color: var(--mut); }
@@ -784,6 +951,7 @@ body {
   border: 1px solid rgba(var(--accg), 0.3);
   border-radius: 2px;
   padding: 4px 10px;
+  min-height: 36px;
   cursor: pointer;
   white-space: nowrap;
 }
@@ -864,6 +1032,8 @@ body {
   border: 1px solid var(--line-2);
   border-radius: 2px;
   padding: 5px 10px;
+  min-width: 44px;
+  min-height: 36px;
   cursor: pointer;
 }
 .codeblock-copy:hover {
@@ -907,7 +1077,7 @@ body {
   border-radius: 50%;
 }
 .keybadge.on .keydot {
-  background: var(--green);
+  background: var(--success);
 }
 .keybadge.off .keydot {
   background: var(--faint);
@@ -968,13 +1138,14 @@ body {
   border: 1px solid var(--acc);
   border-radius: 3px;
   padding: 0 16px;
+  min-height: 44px;
   cursor: pointer;
 }
 .vault-btn:hover:not(:disabled) { opacity: 0.85; }
 .vault-btn:disabled { opacity: 0.5; cursor: default; }
 .vault-error {
   margin: 10px 0 0;
-  color: #F2A0A0;
+  color: var(--danger);
   font-size: 13px;
 }
 .vault-recents { margin-top: 18px; }
@@ -989,6 +1160,7 @@ body {
   border: 1px solid var(--line);
   border-radius: 3px;
   padding: 8px 12px;
+  min-height: 44px;
   cursor: pointer;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -1187,19 +1359,22 @@ body {
      its content, so the rail would grow past the viewport and push the toggle
      off-screen. Capping at 0 forces the nav (flex + overflow below) to scroll. */
   .app { grid-template-columns: minmax(0, 1fr); }
-  .notes { grid-template-columns: 1fr; height: auto; }
+  .notes { grid-template-columns: 1fr; height: auto; min-height: calc(100dvh - 64px); }
   .notelist { border-right: none; border-bottom: 1px solid var(--line); }
   /* .notes drops to height:auto on mobile, so .cm-editor's height:100% would
      collapse to 0 — give the editor a concrete min height and let the page scroll. */
   .editorbox { overflow: visible; }
-  .editorbox .cm-editor { height: auto; min-height: 60vh; }
+  .editorbox .cm-editor { height: auto; min-height: 60vh; min-height: 60dvh; }
   .rail {
     flex-direction: row;
     align-items: center;
     gap: 14px;
     border-right: none;
     border-bottom: 1px solid var(--line);
-    padding: 13px 16px;
+    padding-top: max(13px, env(safe-area-inset-top));
+    padding-right: max(16px, env(safe-area-inset-right));
+    padding-bottom: 13px;
+    padding-left: max(16px, env(safe-area-inset-left));
     overflow-x: visible;
   }
   /* Only the nav scrolls horizontally; the brand (left) and the toggle (right)
@@ -1217,6 +1392,62 @@ body {
   .rail .foot .muted { display: none; }
   .themeswitch-lbl { display: none; }
   .nav a span.t { display: none; }
-  .top { padding: 13px 16px; }
-  .wrap { padding: 26px 18px 50px; }
+  .top {
+    padding-top: 13px;
+    padding-right: max(16px, env(safe-area-inset-right));
+    padding-bottom: 13px;
+    padding-left: max(16px, env(safe-area-inset-left));
+  }
+  .topnote {
+    padding-right: max(16px, env(safe-area-inset-right));
+    padding-left: max(16px, env(safe-area-inset-left));
+  }
+  .wrap {
+    padding-top: 26px;
+    padding-right: max(18px, env(safe-area-inset-right));
+    padding-bottom: max(50px, calc(30px + env(safe-area-inset-bottom)));
+    padding-left: max(18px, env(safe-area-inset-left));
+  }
+  .editorhead,
+  .editorbox,
+  .backlinks {
+    padding-right: max(18px, env(safe-area-inset-right));
+    padding-left: max(18px, env(safe-area-inset-left));
+  }
+  .editorhead { gap: 10px; }
+  .conflictnote,
+  .savenote,
+  .memoryguard,
+  .histpanel,
+  .createprompt {
+    margin-right: max(18px, env(safe-area-inset-right));
+    margin-left: max(18px, env(safe-area-inset-left));
+  }
+  .createprompt,
+  .memoryguard,
+  .searcherror {
+    align-items: stretch;
+    flex-direction: column;
+  }
+  .createprompt .cp-acts { justify-content: flex-end; }
+  .memoryguard button,
+  .searcherror button {
+    min-height: 44px;
+  }
+  .savebadge,
+  .histbtn,
+  .histundo,
+  .histclose,
+  .codeblock-copy,
+  .conflictnote button,
+  .savenote button,
+  .createprompt button {
+    min-height: 44px;
+  }
+  .conflictnote button,
+  .savenote button {
+    margin-left: 0;
+    margin-top: 6px;
+    padding: 0 4px;
+  }
 }

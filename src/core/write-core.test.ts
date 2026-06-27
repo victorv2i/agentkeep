@@ -1,12 +1,16 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest'
-import { mkdtemp, rm, readFile, writeFile, symlink } from 'node:fs/promises'
+import { execFile } from 'node:child_process'
+import { mkdtemp, rm, readFile, writeFile, symlink, mkdir } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { dirname, join } from 'node:path'
+import { promisify } from 'node:util'
 import { Vault } from './vault.js'
 import { VaultGit } from './git.js'
 import { WriteCore } from './write-core.js'
 import { ConflictError, VaultPathError } from './errors.js'
 import { contentHash } from './hash.js'
+
+const execFileP = promisify(execFile)
 
 let dir: string
 let core: WriteCore
@@ -17,6 +21,20 @@ beforeEach(async () => {
   core = new WriteCore(new Vault(dir), git)
 })
 afterEach(async () => { await rm(dir, { recursive: true, force: true }) })
+
+async function gitStatusFor(relPath: string): Promise<string> {
+  const { stdout } = await execFileP('git', ['-C', dir, 'status', '--porcelain', '--', relPath])
+  return String(stdout)
+}
+
+async function lockHeadRef(): Promise<string> {
+  const { stdout } = await execFileP('git', ['-C', dir, 'symbolic-ref', '--quiet', 'HEAD'])
+  const ref = String(stdout).trim()
+  const lock = join(dir, '.git', ...ref.split('/')) + '.lock'
+  await mkdir(dirname(lock), { recursive: true })
+  await writeFile(lock, 'stale lock\n', 'utf8')
+  return lock
+}
 
 describe('WriteCore', () => {
   it('creates a new file and returns its hash + commit', async () => {
@@ -88,6 +106,88 @@ describe('WriteCore', () => {
     }
   })
 
+  it('serializes two ALIASES of the same physical file (same baseHash → one wins, one 409)', async () => {
+    // `a/n.md` and `a//n.md` are different raw caller strings but resolve to the
+    // SAME absolute file and both survive the content-path guard + resolveSafe.
+    // With the lock keyed on the resolved abs they share one mutex, so two writes
+    // carrying the SAME baseHash cannot both pass the CAS: exactly one commits and
+    // the other sees the now-changed content and gets a ConflictError. (Keyed on
+    // the raw string they took different locks and BOTH committed, a silent lost
+    // update with no 409.)
+    const seed = await core.write('a/n.md', 'base\n', { author: 'human', baseHash: null })
+    const settled = await Promise.allSettled([
+      core.write('a/n.md', 'A\n', { author: 'agent', baseHash: seed.hash }),
+      core.write('a//n.md', 'B\n', { author: 'agent', baseHash: seed.hash }),
+    ])
+    const fulfilled = settled.filter((s) => s.status === 'fulfilled')
+    const conflicts = settled.filter(
+      (s) => s.status === 'rejected' && s.reason instanceof ConflictError,
+    )
+    expect(fulfilled).toHaveLength(1)
+    expect(conflicts).toHaveLength(1)
+    // the file holds exactly the winner's content (a clean single write, not a
+    // torn/lost update), and reading it back matches the winner's returned hash.
+    const winner = (fulfilled[0] as PromiseFulfilledResult<{ hash: string }>).value
+    const after = await core.read('a/n.md')
+    expect(after!.hash).toBe(winner.hash)
+    expect(['A\n', 'B\n']).toContain(after!.content)
+  })
+
+  it('a failed git add restores previous bytes and leaves the self-write marker unset', async () => {
+    // Force a REAL, deterministic git failure (no mock): a stale `.git/index.lock`
+    // makes the `git add` inside commitChange throw, so commitChange throws before
+    // write() reaches `selfWrites.set`. The attempted content must be rolled back
+    // and must NOT be marked a self-write, else the watcher would wrongly suppress
+    // the resulting external-looking event.
+    const seed = await core.write('n.md', 'v1\n', { author: 'human', baseHash: null })
+    expect(core.isSelfWrite('n.md', seed.hash)).toBe(true) // consume the successful seed marker
+    await writeFile(join(dir, '.git', 'index.lock'), '')
+    try {
+      await expect(
+        core.write('n.md', 'v2\n', { author: 'agent', baseHash: seed.hash }),
+      ).rejects.toThrow()
+    } finally {
+      await rm(join(dir, '.git', 'index.lock'), { force: true })
+    }
+    expect(await readFile(join(dir, 'n.md'), 'utf8')).toBe('v1\n')
+    expect(await gitStatusFor('n.md')).toBe('')
+    expect(core.isSelfWrite('n.md', contentHash('v2\n'))).toBe(false)
+  })
+
+  it('a failed git commit restores previous bytes and clears staged state', async () => {
+    const seed = await core.write('n.md', 'v1\n', { author: 'human', baseHash: null })
+    expect(core.isSelfWrite('n.md', seed.hash)).toBe(true)
+    const lock = await lockHeadRef()
+
+    try {
+      await expect(
+        core.write('n.md', 'v2\n', { author: 'agent', baseHash: seed.hash }),
+      ).rejects.toThrow()
+    } finally {
+      await rm(lock, { force: true })
+    }
+
+    expect(await readFile(join(dir, 'n.md'), 'utf8')).toBe('v1\n')
+    expect(await gitStatusFor('n.md')).toBe('')
+    expect(core.isSelfWrite('n.md', contentHash('v2\n'))).toBe(false)
+  })
+
+  it('a failed git commit removes a newly-created file and clears staged state', async () => {
+    const lock = await lockHeadRef()
+
+    try {
+      await expect(
+        core.write('new.md', 'new file\n', { author: 'agent', baseHash: null }),
+      ).rejects.toThrow()
+    } finally {
+      await rm(lock, { force: true })
+    }
+
+    await expect(readFile(join(dir, 'new.md'), 'utf8')).rejects.toMatchObject({ code: 'ENOENT' })
+    expect(await gitStatusFor('new.md')).toBe('')
+    expect(core.isSelfWrite('new.md', contentHash('new file\n'))).toBe(false)
+  })
+
   it('refuses to read OR write through an in-vault symlink that escapes the root', async () => {
     const outside = await mkdtemp(join(tmpdir(), 'ak-outside-'))
     try {
@@ -113,5 +213,14 @@ describe('WriteCore', () => {
     } finally {
       await rm(outside, { recursive: true, force: true })
     }
+  })
+
+  it('rejects backslash and root-level leading-dash content paths', async () => {
+    await expect(
+      core.write('--all.md', 'nope\n', { author: 'agent', baseHash: null }),
+    ).rejects.toBeInstanceOf(VaultPathError)
+    await expect(
+      core.write('notes\\slash.md', 'nope\n', { author: 'agent', baseHash: null }),
+    ).rejects.toBeInstanceOf(VaultPathError)
   })
 })

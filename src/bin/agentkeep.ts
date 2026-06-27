@@ -3,7 +3,13 @@ import { spawn, spawnSync } from 'node:child_process'
 import { resolve, join, dirname } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { stat } from 'node:fs/promises'
-import { parseLauncherArgs, initVault } from './launcher.js'
+import {
+  parseLauncherArgs,
+  initVault,
+  tailscaleServeArgs,
+  tailscaleServeOffArgs,
+  waitForHttpReady,
+} from './launcher.js'
 
 /**
  * The one-line `agentkeep` launcher (self-host model — runs from the repo
@@ -12,7 +18,7 @@ import { parseLauncherArgs, initVault } from './launcher.js'
  */
 const HELP = `agentkeep — self-hosted vault launcher (runs from the repo checkout)
 
-  agentkeep init <path>               create a vault skeleton (inbox/, tasks/, north-star.md)
+  agentkeep init <path>               create a vault skeleton (inbox/, memory/)
   agentkeep open <path> [--port N]    build (if needed) + serve the web app on this vault
   agentkeep serve <path> --tailscale  open + expose over your tailnet via 'tailscale serve'
 
@@ -66,23 +72,32 @@ async function main(): Promise<void> {
     }
   }
 
-  if (args.cmd === 'serve' && args.tailscale) {
-    const ts = spawnSync('tailscale', ['serve', '--bg', '--https=443', `http://127.0.0.1:${args.port}`], {
-      stdio: 'inherit',
-    })
-    if (ts.error || ts.status !== 0) {
-      process.stderr.write("Could not run 'tailscale serve' — is Tailscale installed and up? Serving locally only.\n")
-    }
-  }
-
   process.stdout.write(`Serving vault ${vault} on http://localhost:${args.port}\n`)
   // Invoke the next bin directly (not via `pnpm start --`) so the port flag
   // always reaches `next start` regardless of pnpm's arg forwarding.
-  const child = spawn(join(webDir, 'node_modules', '.bin', 'next'), ['start', '-p', String(args.port)], {
+  const child = spawn(join(webDir, 'node_modules', '.bin', 'next'), ['start', '-p', String(args.port), '-H', '127.0.0.1'], {
     cwd: webDir,
     env: { ...process.env, AGENTKEEP_VAULT: vault },
     stdio: 'inherit',
   })
+
+  let childExited = false
+  let tailscaleActive = false
+  const cleanupTailscale = () => {
+    if (!tailscaleActive) return
+    tailscaleActive = false
+    const off = spawnSync('tailscale', tailscaleServeOffArgs(), { stdio: 'ignore' })
+    if (off.error || off.status !== 0) {
+      process.stderr.write("Could not clean up 'tailscale serve --https=443 off'. You may need to run it manually.\n")
+    }
+  }
+  const shutdown = (signal: NodeJS.Signals) => {
+    cleanupTailscale()
+    if (!child.killed) child.kill(signal)
+  }
+  process.once('SIGINT', () => shutdown('SIGINT'))
+  process.once('SIGTERM', () => shutdown('SIGTERM'))
+
   child.on('error', (err) => {
     process.stderr.write(
       `Could not start the web app (is the repo built? try 'pnpm install && pnpm --filter @agentkeep/web build'): ${err.message}\n`,
@@ -90,8 +105,28 @@ async function main(): Promise<void> {
     process.exitCode = 1
   })
   child.on('exit', (code) => {
+    childExited = true
+    cleanupTailscale()
     process.exitCode = code ?? 0
   })
+
+  if (args.cmd === 'serve' && args.tailscale) {
+    process.stdout.write('Waiting for the local web app before enabling Tailscale Serve…\n')
+    const ready = await waitForHttpReady(`http://127.0.0.1:${args.port}/`, { shouldStop: () => childExited })
+    if (!ready) {
+      if (!childExited) {
+        process.stderr.write("Local web app did not become ready; not running 'tailscale serve'. Serving locally only.\n")
+      }
+      return
+    }
+    const ts = spawnSync('tailscale', tailscaleServeArgs(args.port), { stdio: 'inherit' })
+    if (ts.error || ts.status !== 0) {
+      process.stderr.write("Could not run 'tailscale serve' — is Tailscale installed and up? Serving locally only.\n")
+    } else {
+      tailscaleActive = true
+      process.stdout.write("Tailscale Serve is active; Agentkeep will remove the HTTPS 443 route when the app exits.\n")
+    }
+  }
 }
 
 main().catch((err) => {

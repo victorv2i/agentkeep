@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest'
 import { mkdtemp, rm, readFile, stat } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { parseLauncherArgs, initVault } from './launcher.js'
+import { parseLauncherArgs, initVault, tailscaleServeArgs, tailscaleServeOffArgs } from './launcher.js'
 
 describe('parseLauncherArgs', () => {
   it('parses init/open/serve with path and options', () => {
@@ -19,6 +19,13 @@ describe('parseLauncherArgs', () => {
     expect(parseLauncherArgs([]).cmd).toBe('help')
     expect(parseLauncherArgs(['bogus']).cmd).toBe('help')
     expect(parseLauncherArgs(['open']).cmd).toBe('help')
+  })
+})
+
+describe('tailscale serve args', () => {
+  it('uses localhost-only proxy targets and the matching off command', () => {
+    expect(tailscaleServeArgs(4123)).toEqual(['serve', '--bg', '--https=443', 'http://127.0.0.1:4123'])
+    expect(tailscaleServeOffArgs()).toEqual(['serve', '--https=443', 'off'])
   })
 })
 

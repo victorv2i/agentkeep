@@ -247,7 +247,7 @@ class TaskBoxWidget extends WidgetType {
     }
     input.addEventListener('mousedown', swallow)
     input.addEventListener('click', swallow)
-    input.addEventListener('mouseup', (e) => {
+    const toggle = (e: Event) => {
       e.stopPropagation()
       const view = this.getView()
       // Re-resolve the live position: the document may have shifted since this
@@ -261,6 +261,12 @@ class TaskBoxWidget extends WidgetType {
         }
       }
       flipTaskBox(view, pos)
+    }
+    input.addEventListener('mouseup', toggle)
+    input.addEventListener('keydown', (e) => {
+      if (!isActivationKey(e)) return
+      e.preventDefault()
+      toggle(e)
     })
     root.appendChild(input)
     this.root = root
@@ -361,8 +367,13 @@ class WikiLinkWidget extends WidgetType {
     pill.addEventListener('mousedown', (e) => {
       e.preventDefault()
       e.stopPropagation()
+    })
+    pill.addEventListener('click', (e) => {
+      e.preventDefault()
+      e.stopPropagation()
       this.onClick(this.parts)
     })
+    pill.addEventListener('keydown', (e) => onKeyboardActivate(e, () => this.onClick(this.parts)))
     return pill
   }
   ignoreEvent(): boolean {
@@ -403,8 +414,13 @@ class EmbedCardWidget extends WidgetType {
     card.addEventListener('mousedown', (e) => {
       e.preventDefault()
       e.stopPropagation()
+    })
+    card.addEventListener('click', (e) => {
+      e.preventDefault()
+      e.stopPropagation()
       this.onClick(this.parts)
     })
+    card.addEventListener('keydown', (e) => onKeyboardActivate(e, () => this.onClick(this.parts)))
     return card
   }
   ignoreEvent(): boolean {
@@ -477,9 +493,20 @@ function sameParts(a: WikiLinkParts, b: WikiLinkParts): boolean {
   return a.anchor.kind === b.anchor.kind && a.anchor.value === b.anchor.value
 }
 
+function isActivationKey(event: KeyboardEvent): boolean {
+  return event.key === 'Enter' || event.key === ' ' || event.key === 'Spacebar'
+}
+
+function onKeyboardActivate(event: KeyboardEvent, activate: () => void): void {
+  if (!isActivationKey(event)) return
+  event.preventDefault()
+  event.stopPropagation()
+  activate()
+}
+
 /** Toggle the `[ ]`↔`[x]` on the task line containing `pos`, via a real edit. */
 function flipTaskBox(view: EditorView | null, pos: number): void {
-  if (!view) return
+  if (!view || view.state.readOnly) return
   const line = view.state.doc.lineAt(pos)
   const m = /\[( |x|X)]/.exec(line.text)
   if (!m) return

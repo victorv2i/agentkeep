@@ -1,6 +1,7 @@
 'use client'
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useRouter } from 'next/navigation'
 import CodeMirror, { type ReactCodeMirrorRef } from '@uiw/react-codemirror'
 import { EditorView, keymap } from '@codemirror/view'
 import { autocompletion } from '@codemirror/autocomplete'
@@ -21,6 +22,7 @@ import {
 import type { NoteListItem, NoteProvenance } from '@/lib/vault'
 
 type SaveState = 'saved' | 'saving' | 'unsaved' | 'conflict' | 'error'
+type SaveOutcome = 'saved' | 'unchanged' | 'conflict' | 'error' | 'stale'
 
 interface OpenNote {
   path: string
@@ -39,6 +41,7 @@ export function NotesClient({
   /** Optional `/?path=<vault-relative>` deep-link target to open on load. */
   initialPath?: string
 }) {
+  const router = useRouter()
   const [notes, setNotes] = useState<NoteListItem[]>(initialNotes)
   const [filter, setFilter] = useState('')
   const [open, setOpen] = useState<OpenNote | null>(null)
@@ -52,14 +55,24 @@ export function NotesClient({
   // An unresolved `[[wikilink]]` the user clicked — shown as a calm in-theme
   // inline prompt (themed), never a native window.confirm dialog.
   const [createTarget, setCreateTarget] = useState<string | null>(null)
+  const [memoryEditArmed, setMemoryEditArmed] = useState<Record<string, true>>({})
 
   const cmRef = useRef<ReactCodeMirrorRef>(null)
   const saveTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const savePromise = useRef<Promise<SaveOutcome> | null>(null)
+  const mountedRef = useRef(true)
   // Latest doc/hash the save loop reads (avoids stale closures in the timer).
   const docRef = useRef('')
   const openRef = useRef<OpenNote | null>(null)
+  const saveStateRef = useRef<SaveState>('saved')
   docRef.current = doc
   openRef.current = open
+  saveStateRef.current = saveState
+
+  const setSaveStatus = useCallback((next: SaveState) => {
+    saveStateRef.current = next
+    if (mountedRef.current) setSaveState(next)
+  }, [])
 
   // A synchronous basename set so the live-preview can style resolved vs
   // placeholder links without an await per render. Refreshed with the note list.
@@ -82,47 +95,6 @@ export function NotesClient({
   const getCompletionNotes = useCallback(
     () => notesRef.current.map((n) => ({ basename: n.basename, title: n.title })),
     [],
-  )
-
-  const refreshNotes = useCallback(async () => {
-    setNotes(await listNotesAction())
-  }, [])
-
-  const openNote = useCallback(
-    async (path: string, anchor?: WikiLinkParts['anchor']) => {
-      const loaded = await loadNoteAction(path)
-      if (!loaded) {
-        // Vanished (e.g. deleted out of band) — drop it from the list.
-        await refreshNotes()
-        return
-      }
-      if (saveTimer.current) clearTimeout(saveTimer.current)
-      setOpen({
-        path: loaded.path,
-        title: loaded.title,
-        content: loaded.content,
-        hash: loaded.hash,
-        backlinks: loaded.backlinks,
-      })
-      setDoc(loaded.content)
-      setSaveState('saved')
-      // Load provenance for the badge + history panel. Don't block the editor on
-      // it: clear stale provenance, then fill it in when it lands (ignore a
-      // response for a note we've since navigated away from).
-      setProv(null)
-      setHistoryOpen(false)
-      void noteProvenanceAction(loaded.path).then((p) => {
-        if (openRef.current?.path === loaded.path) setProv(p)
-      })
-      // `[[Note#Heading]]` / `[[Note^block]]`: after the note's content lands,
-      // scroll the editor to the matching line. The CodeMirror view is mounted
-      // by the next paint, so defer one frame.
-      if (anchor) {
-        const target = anchor
-        requestAnimationFrame(() => scrollToAnchor(loaded.content, target))
-      }
-    },
-    [refreshNotes],
   )
 
   // Scroll the live editor to the line that hosts a `#heading` or `^block-id`.
@@ -157,72 +129,205 @@ export function NotesClient({
     [],
   )
 
+  const refreshNotes = useCallback(async () => {
+    setNotes(await listNotesAction())
+  }, [])
+
   // Save through the CAS. On conflict we DO NOT clobber: keep the user's text,
   // flip to the conflict state. Backlinks/title refresh on a clean save.
-  const doSave = useCallback(async () => {
-    const cur = openRef.current
-    if (!cur) return
-    const content = docRef.current
-    if (content === cur.content) {
-      setSaveState('saved')
-      return
-    }
-    setSaveState('saving')
-    let res
-    try {
-      res = await saveNoteAction(cur.path, content, cur.hash)
-    } catch {
-      // A non-conflict failure (the action re-throws those): the vault couldn't
-      // be reached or the write failed. Surface it calmly, keep the buffer — the
-      // user can retry by editing again; never let it reject into an overlay.
-      if (openRef.current?.path !== cur.path) return
-      setSaveState('error')
-      return
-    }
-    // The note may have been switched while saving — ignore a stale response.
-    if (openRef.current?.path !== cur.path) return
-    if (res.ok) {
-      const reloaded = await loadNoteAction(cur.path)
-      setOpen((o) =>
-        o && o.path === cur.path
-          ? {
-              ...o,
+  const doSave = useCallback(
+    async ({ updateUi = true }: { updateUi?: boolean } = {}): Promise<SaveOutcome> => {
+      for (;;) {
+        if (savePromise.current) {
+          const first = await savePromise.current
+          const cur = openRef.current
+          if (
+            first !== 'conflict' &&
+            first !== 'error' &&
+            cur &&
+            docRef.current !== cur.content &&
+            saveStateRef.current !== 'conflict'
+          ) {
+            continue
+          }
+          return first
+        }
+
+        const run = (async (): Promise<SaveOutcome> => {
+          const cur = openRef.current
+          if (!cur) return 'unchanged'
+          const content = docRef.current
+          if (content === cur.content) {
+            if (updateUi) setSaveStatus('saved')
+            return 'unchanged'
+          }
+          if (saveStateRef.current === 'conflict') return 'conflict'
+
+          if (updateUi) setSaveStatus('saving')
+          let res
+          try {
+            res = await saveNoteAction(cur.path, content, cur.hash)
+          } catch {
+            // A non-conflict failure: keep the buffer and surface a retry affordance.
+            if (openRef.current?.path !== cur.path) return 'stale'
+            if (updateUi) setSaveStatus('error')
+            else saveStateRef.current = 'error'
+            return 'error'
+          }
+
+          // The note may have been switched while saving — ignore a stale response.
+          if (openRef.current?.path !== cur.path) return 'stale'
+
+          if (res.ok) {
+            let reloaded: Awaited<ReturnType<typeof loadNoteAction>> | undefined
+            if (updateUi) {
+              try {
+                reloaded = await loadNoteAction(cur.path)
+              } catch {
+                // The save succeeded; a stale title/backlink refresh should not
+                // turn it into a failed save.
+              }
+            }
+            const nextOpen: OpenNote = {
+              ...cur,
               content,
               hash: res.hash,
-              title: reloaded?.title ?? o.title,
-              backlinks: reloaded?.backlinks ?? o.backlinks,
+              title: reloaded?.title ?? cur.title,
+              backlinks: reloaded?.backlinks ?? cur.backlinks,
             }
-          : o,
-      )
-      setSaveState(docRef.current === content ? 'saved' : 'unsaved')
-      await refreshNotes()
-      // A clean save is a new human commit — refresh provenance so the badge +
-      // history reflect "you edited" now (still ignore a stale-note response).
-      void noteProvenanceAction(cur.path).then((p) => {
-        if (openRef.current?.path === cur.path) setProv(p)
-      })
-    } else {
-      // ConflictError: the file changed under us (likely the agent). Surface it,
-      // keep the buffer — the user reloads to merge, never silently overwritten.
-      setSaveState('conflict')
+            openRef.current = nextOpen
+            if (updateUi && mountedRef.current) {
+              setOpen((o) => (o && o.path === cur.path ? nextOpen : o))
+              setSaveStatus(docRef.current === content ? 'saved' : 'unsaved')
+              try {
+                await refreshNotes()
+              } catch {
+                // The editor buffer is saved; list refresh can recover next load.
+              }
+              void noteProvenanceAction(cur.path)
+                .then((p) => {
+                  if (openRef.current?.path === cur.path) setProv(p)
+                })
+                .catch(() => {
+                  // Provenance is secondary to keeping the edit saved.
+                })
+            } else if (docRef.current === content) {
+              saveStateRef.current = 'saved'
+            }
+            return 'saved'
+          }
+
+          // ConflictError: the file changed under us (likely the agent). Surface it,
+          // keep the buffer — the user reloads to merge, never silently overwritten.
+          if (updateUi) setSaveStatus('conflict')
+          else saveStateRef.current = 'conflict'
+          return 'conflict'
+        })()
+
+        savePromise.current = run
+        let result: SaveOutcome
+        try {
+          result = await run
+        } finally {
+          if (savePromise.current === run) savePromise.current = null
+        }
+        const cur = openRef.current
+        if (
+          result !== 'conflict' &&
+          result !== 'error' &&
+          cur &&
+          docRef.current !== cur.content &&
+          saveStateRef.current !== 'conflict'
+        ) {
+          continue
+        }
+        return result
+      }
+    },
+    [refreshNotes, setSaveStatus],
+  )
+
+  const flushBeforeLeaving = useCallback(async () => {
+    if (saveTimer.current) {
+      clearTimeout(saveTimer.current)
+      saveTimer.current = null
     }
-  }, [refreshNotes])
+    const cur = openRef.current
+    if (!cur || docRef.current === cur.content) return true
+    const result = await doSave()
+    return result === 'saved' || result === 'unchanged'
+  }, [doSave])
+
+  const openNote = useCallback(
+    async (
+      path: string,
+      anchor?: WikiLinkParts['anchor'],
+      opts: { discardCurrent?: boolean } = {},
+    ) => {
+      if (!opts.discardCurrent) {
+        const canLeave = await flushBeforeLeaving()
+        if (!canLeave) return false
+      }
+      const loaded = await loadNoteAction(path)
+      if (!loaded) {
+        // Vanished (e.g. deleted out of band) — drop it from the list.
+        await refreshNotes()
+        return false
+      }
+      if (saveTimer.current) clearTimeout(saveTimer.current)
+      saveTimer.current = null
+      const nextOpen = {
+        path: loaded.path,
+        title: loaded.title,
+        content: loaded.content,
+        hash: loaded.hash,
+        backlinks: loaded.backlinks,
+      }
+      openRef.current = nextOpen
+      docRef.current = loaded.content
+      setOpen(nextOpen)
+      setDoc(loaded.content)
+      setSaveStatus('saved')
+      setCreateTarget(null)
+      // Load provenance for the badge + history panel. Don't block the editor on
+      // it: clear stale provenance, then fill it in when it lands (ignore a
+      // response for a note we've since navigated away from).
+      setProv(null)
+      setHistoryOpen(false)
+      void noteProvenanceAction(loaded.path)
+        .then((p) => {
+          if (openRef.current?.path === loaded.path) setProv(p)
+        })
+        .catch(() => {
+          if (openRef.current?.path === loaded.path) setProv(null)
+        })
+      // `[[Note#Heading]]` / `[[Note^block]]`: after the note's content lands,
+      // scroll the editor to the matching line. The CodeMirror view is mounted
+      // by the next paint, so defer one frame.
+      if (anchor) {
+        const target = anchor
+        requestAnimationFrame(() => scrollToAnchor(loaded.content, target))
+      }
+      return true
+    },
+    [flushBeforeLeaving, refreshNotes, scrollToAnchor, setSaveStatus],
+  )
 
   const onChange = useCallback((value: string) => {
     setDoc(value)
+    docRef.current = value
     const cur = openRef.current
     if (!cur) return
-    setSaveState((s) => (s === 'conflict' ? 'conflict' : value === cur.content ? 'saved' : 'unsaved'))
+    setSaveStatus(saveStateRef.current === 'conflict' ? 'conflict' : value === cur.content ? 'saved' : 'unsaved')
     if (saveTimer.current) clearTimeout(saveTimer.current)
     // Debounced autosave; a conflict pauses autosave until the user reloads.
     saveTimer.current = setTimeout(() => {
+      saveTimer.current = null
       if (saveStateNotConflict()) void doSave()
     }, 1200)
-  }, [doSave])
+  }, [doSave, setSaveStatus])
 
   // Read latest save state without a dep (the timer closure is created fresh).
-  const saveStateRef = useRef<SaveState>('saved')
-  saveStateRef.current = saveState
   const saveStateNotConflict = () => saveStateRef.current !== 'conflict'
 
   // Clicking a `[[wikilink]]` (or `![[embed]]`): open it if it resolves —
@@ -299,6 +404,15 @@ export function NotesClient({
           return
         }
         if (saveTimer.current) clearTimeout(saveTimer.current)
+        saveTimer.current = null
+        openRef.current = {
+          path: cur.path,
+          content: res.note.content,
+          hash: res.note.hash,
+          title: res.note.title,
+          backlinks: res.note.backlinks,
+        }
+        docRef.current = res.note.content
         setOpen((o) =>
           o && o.path === cur.path
             ? {
@@ -311,21 +425,91 @@ export function NotesClient({
             : o,
         )
         setDoc(res.note.content)
-        setSaveState('saved')
+        setSaveStatus('saved')
         setProv(res.provenance)
         await refreshNotes()
       } finally {
         setUndoingSha(null)
       }
     },
-    [refreshNotes, undoingSha],
+    [refreshNotes, setSaveStatus, undoingSha],
   )
 
   useEffect(() => {
+    mountedRef.current = true
     return () => {
       if (saveTimer.current) clearTimeout(saveTimer.current)
+      saveTimer.current = null
+      mountedRef.current = false
+      if (
+        openRef.current &&
+        docRef.current !== openRef.current.content &&
+        saveStateRef.current !== 'conflict'
+      ) {
+        void doSave({ updateUi: false })
+      }
     }
-  }, [])
+  }, [doSave])
+
+  useEffect(() => {
+    function onBeforeUnload(event: BeforeUnloadEvent) {
+      const cur = openRef.current
+      if (!cur || docRef.current === cur.content) return
+      event.preventDefault()
+      event.returnValue = ''
+    }
+
+    function onPageHide() {
+      if (
+        openRef.current &&
+        docRef.current !== openRef.current.content &&
+        saveStateRef.current !== 'conflict'
+      ) {
+        void doSave({ updateUi: false })
+      }
+    }
+
+    window.addEventListener('beforeunload', onBeforeUnload)
+    window.addEventListener('pagehide', onPageHide)
+    return () => {
+      window.removeEventListener('beforeunload', onBeforeUnload)
+      window.removeEventListener('pagehide', onPageHide)
+    }
+  }, [doSave])
+
+  useEffect(() => {
+    function onDocumentClick(event: MouseEvent) {
+      if (
+        event.defaultPrevented ||
+        event.button !== 0 ||
+        event.metaKey ||
+        event.ctrlKey ||
+        event.shiftKey ||
+        event.altKey
+      ) {
+        return
+      }
+      const target = event.target instanceof Element ? event.target.closest('a[href]') : null
+      if (!target || target.closest('.cm-editor')) return
+      const anchor = target as HTMLAnchorElement
+      if (anchor.target && anchor.target !== '_self') return
+      const href = anchor.getAttribute('href')
+      if (!href || href.startsWith('#') || href.startsWith('mailto:') || href.startsWith('tel:')) return
+      const url = new URL(anchor.href, window.location.href)
+      if (url.origin !== window.location.origin) return
+      const cur = openRef.current
+      if (!cur || docRef.current === cur.content) return
+
+      event.preventDefault()
+      void (async () => {
+        const saved = await flushBeforeLeaving()
+        if (saved) router.push(`${url.pathname}${url.search}${url.hash}`)
+      })()
+    }
+
+    document.addEventListener('click', onDocumentClick, true)
+    return () => document.removeEventListener('click', onDocumentClick, true)
+  }, [flushBeforeLeaving, router])
 
   // Deep-link: `/?path=<vault-relative path>` opens that note on load (the
   // graph view and search results navigate here). The server page passes the
@@ -369,6 +553,7 @@ export function NotesClient({
     if (q === '') return notes
     return notes.filter((n) => n.title.toLowerCase().includes(q))
   }, [notes, filter])
+  const memoryGuardActive = open ? open.path.startsWith('memory/') && !memoryEditArmed[open.path] : false
 
   return (
     <div className="notes">
@@ -398,7 +583,7 @@ export function NotesClient({
 
       <section className="editorpane">
         {createTarget ? (
-          <div className="createprompt" role="dialog" aria-label="Create note">
+          <div className="createprompt" role="group" aria-label="Create note">
             <span className="cp-text">
               “{createTarget}” isn’t a note yet. Create it?
             </span>
@@ -438,7 +623,11 @@ export function NotesClient({
                   History
                 </button>
               ) : null}
-              <SaveBadge state={saveState} onReload={() => void openNote(open.path)} />
+              <SaveBadge
+                state={saveState}
+                onReload={() => void openNote(open.path, null, { discardCurrent: true })}
+                onRetry={() => void doSave()}
+              />
             </header>
             {historyOpen && prov ? (
               <HistoryPanel
@@ -449,11 +638,33 @@ export function NotesClient({
               />
             ) : null}
             {saveState === 'conflict' ? (
-              <div className="conflictnote" role="status">
+              <div className="conflictnote" role="status" aria-live="polite">
                 This note changed since you opened it. Reload to merge; your text is
                 kept.{' '}
-                <button type="button" onClick={() => void openNote(open.path)}>
+                <button type="button" onClick={() => void openNote(open.path, null, { discardCurrent: true })}>
                   Reload
+                </button>
+              </div>
+            ) : null}
+            {saveState === 'error' ? (
+              <div className="savenote error">
+                Save failed. Your text is still here.{' '}
+                <button type="button" onClick={() => void doSave()}>
+                  Retry save
+                </button>
+              </div>
+            ) : null}
+            {memoryGuardActive ? (
+              <div id="memory-edit-guard" className="memoryguard" role="note">
+                <span className="memoryguard-text">
+                  <strong>Agent-owned memory.</strong> Corrections here change what your
+                  agent will rely on.
+                </span>
+                <button
+                  type="button"
+                  onClick={() => setMemoryEditArmed((armed) => ({ ...armed, [open.path]: true }))}
+                >
+                  Correct memory
                 </button>
               </div>
             ) : null}
@@ -469,6 +680,9 @@ export function NotesClient({
                 basicSetup={false}
                 theme="none"
                 height="100%"
+                editable={!memoryGuardActive}
+                readOnly={memoryGuardActive}
+                aria-describedby={memoryGuardActive ? 'memory-edit-guard' : undefined}
               />
             </div>
             {open.backlinks.length > 0 ? (
@@ -560,7 +774,7 @@ function HistoryPanel({
   onClose: () => void
 }) {
   return (
-    <div className="histpanel" role="dialog" aria-label="Note history">
+    <div className="histpanel" role="region" aria-label="Note history">
       <div className="histhead">
         <span className="histlbl">History · {prov.history.length}</span>
         <button type="button" className="histclose" onClick={onClose} aria-label="Close history">
@@ -601,7 +815,15 @@ function HistoryPanel({
   )
 }
 
-function SaveBadge({ state, onReload }: { state: SaveState; onReload: () => void }) {
+function SaveBadge({
+  state,
+  onReload,
+  onRetry,
+}: {
+  state: SaveState
+  onReload: () => void
+  onRetry: () => void
+}) {
   const map: Record<SaveState, string> = {
     saved: 'Saved',
     saving: 'Saving…',
@@ -611,10 +833,25 @@ function SaveBadge({ state, onReload }: { state: SaveState; onReload: () => void
   }
   if (state === 'conflict') {
     return (
-      <button type="button" className="savebadge conflict" onClick={onReload}>
-        {map[state]}
-      </button>
+      <span className="savestatus" role="status" aria-live="polite" aria-atomic="true">
+        <button type="button" className="savebadge conflict" onClick={onReload}>
+          {map[state]} · Reload
+        </button>
+      </span>
     )
   }
-  return <span className={`savebadge ${state}`}>{map[state]}</span>
+  if (state === 'error') {
+    return (
+      <span className="savestatus" role="status" aria-live="polite" aria-atomic="true">
+        <button type="button" className="savebadge error" onClick={onRetry}>
+          {map[state]} · Retry
+        </button>
+      </span>
+    )
+  }
+  return (
+    <span className="savestatus" role="status" aria-live="polite" aria-atomic="true">
+      <span className={`savebadge ${state}`}>{map[state]}</span>
+    </span>
+  )
 }

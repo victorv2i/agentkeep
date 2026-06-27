@@ -82,16 +82,23 @@ export class Vault {
 }
 
 /**
- * Reject any path that targets a hidden (dot-prefixed) segment — `.git/`,
- * `.obsidian/`, `.agentkeep/`, or a dotfile. `resolveSafe` blocks escaping the
- * vault ROOT but deliberately permits in-root dotfolders, so the MUTATION path
- * (WriteCore.write / delete) and the agent-exposed read seam must reject them
- * here: otherwise a connected agent could write `.git/hooks/*` (code execution
- * on the next commit) or read `.git/config` (secret leak). The app's own reads
- * of `.agentkeep/*` go through `core.read` directly and are unaffected.
+ * Reject paths that are not vault content paths: hidden (dot-prefixed) segments,
+ * Windows-style backslashes, and root-level leading dashes. `resolveSafe` blocks
+ * escaping the vault ROOT but deliberately permits in-root dotfolders, so the
+ * MUTATION path (WriteCore.write / delete) and the agent-exposed read seam must
+ * reject them here: otherwise a connected agent could write `.git/hooks/*` (code
+ * execution on the next commit) or read `.git/config` (secret leak). The app's
+ * own reads of `.agentkeep/*` go through `core.read` directly and are unaffected.
  */
 export function assertVaultContentPath(relPath: string): void {
-  for (const seg of relPath.split('/')) {
+  if (relPath.includes('\\')) {
+    throw new VaultPathError(`Backslashes are not allowed in vault content paths: ${relPath}`)
+  }
+  const segments = relPath.split('/')
+  if ((segments[0] ?? '').startsWith('-')) {
+    throw new VaultPathError(`Path cannot start with '-': ${relPath}`)
+  }
+  for (const seg of segments) {
     if (seg.startsWith('.')) {
       throw new VaultPathError(`Path targets a hidden (non-content) segment: ${relPath}`)
     }

@@ -59,6 +59,28 @@ function slugifyTopic(topic: string): string {
 
 const MEMORY_TYPES = ['fact', 'preference', 'person', 'project'] as const
 
+/**
+ * Near-duplicate guard for `remember`. Topics get slugged into a filename, so a
+ * reworded topic ("LDI team meeting summary" vs "...ultimate summary") slugs
+ * differently and forks a second file — the recurring source of memory/ dupes.
+ * When a topic has no exact slug match, we compare its title tokens against the
+ * existing memory notes and, only on a HIGH overlap, update that note instead of
+ * forking. Conservative on purpose: under-merging (two near-twins kept) is a
+ * cosmetic miss; over-merging would silently overwrite a distinct memory.
+ */
+const DUP_STOPWORDS = new Set(['the', 'a', 'an', 'of', 'for', 'to', 'and', 'in', 'on', 'my', 'your', 'with'])
+function topicTokens(s: string): Set<string> {
+  return new Set(s.toLowerCase().split(/[^a-z0-9]+/).filter((t) => t.length > 0 && !DUP_STOPWORDS.has(t)))
+}
+function tokenJaccard(a: Set<string>, b: Set<string>): number {
+  if (a.size === 0 || b.size === 0) return 0
+  let inter = 0
+  for (const t of a) if (b.has(t)) inter++
+  return inter / (a.size + b.size - inter)
+}
+/** At/above this title-token overlap a reworded topic updates the existing note. */
+const DUP_MERGE_THRESHOLD = 0.8
+
 export function createVaultTools(deps: VaultToolsDeps): VaultTool[] {
   const { vault, git, core, indexer } = deps
 
@@ -188,14 +210,31 @@ export function createVaultTools(deps: VaultToolsDeps): VaultTool[] {
         if (source !== null) doc = setFrontmatterKey(doc, 'source', source)
         doc = setFrontmatterKey(doc, 'updated', updated)
 
-        const path = `memory/${slug}.md`
+        const exactPath = `memory/${slug}.md`
         try {
+          // Pick the upsert target: the exact slug if it already exists; otherwise,
+          // if a reworded topic already has a near-duplicate memory note, update
+          // THAT note instead of forking a second file. Only a high title-token
+          // overlap redirects (see DUP_MERGE_THRESHOLD), so distinct topics stay
+          // separate; replacing the whole file matches remember's own contract.
+          let path = exactPath
+          let merged = false
+          if ((await core.read(exactPath)) === null) {
+            const want = topicTokens(topic)
+            let best: { path: string; sim: number } | null = null
+            for (const hit of indexer.search(topic)) {
+              if (!hit.path.startsWith('memory/') || hit.path === exactPath) continue
+              const sim = tokenJaccard(want, topicTokens(hit.title))
+              if (sim >= DUP_MERGE_THRESHOLD && (best === null || sim > best.sim)) best = { path: hit.path, sim }
+            }
+            if (best) { path = best.path; merged = true }
+          }
           // Upsert: the current hash (or expect-create) is the CAS base. A write
           // that races a concurrent edit surfaces as an honest 409, never a clobber.
           const current = await core.read(path)
           const r = await core.write(path, doc, { author: 'agent', baseHash: current?.hash ?? null })
           await indexer.reindexFile(path)
-          return ok({ path, hash: r.hash, commit: r.commit })
+          return ok(merged ? { path, hash: r.hash, commit: r.commit, merged } : { path, hash: r.hash, commit: r.commit })
         } catch (e) {
           if (e instanceof ConflictError) return err(e.message, e.httpStatus)
           if (e instanceof VaultPathError) return err(e.message, 400)

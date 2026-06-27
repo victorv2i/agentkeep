@@ -3,7 +3,7 @@ import { Shell } from '../components/Shell'
 import {
   getUser,
   getMemoryNotes,
-  getAgentActivity,
+  getKeeperLoopSummary,
   type MemoryNote,
 } from '@/lib/vault'
 
@@ -26,6 +26,17 @@ function shortDate(iso: string): string {
   return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })
 }
 
+function shortDateTime(iso: string): string {
+  const d = new Date(iso)
+  if (Number.isNaN(d.getTime())) return iso
+  return d.toLocaleString('en-US', {
+    month: 'short',
+    day: 'numeric',
+    hour: 'numeric',
+    minute: '2-digit',
+  })
+}
+
 /**
  * "What your agent believes" — the plain markdown under memory/, grouped by
  * type, plus the agent's recent commits. This page only SHOWS what is on disk
@@ -33,11 +44,12 @@ function shortDate(iso: string): string {
  * the vault is the readable store.
  */
 export default async function MemoryPage() {
-  const [user, notes, activity] = await Promise.all([
+  const [user, notes, keeper] = await Promise.all([
     getUser(),
     getMemoryNotes(),
-    getAgentActivity(),
+    getKeeperLoopSummary(),
   ])
+  const activity = keeper.recentActivity
 
   const grouped = GROUPS.map((g) => ({
     ...g,
@@ -52,6 +64,72 @@ export default async function MemoryPage() {
           Every memory is a plain markdown note under <code>memory/</code>, written by your
           agent&rsquo;s <code>remember</code> tool, editable by you, every change a git commit.
         </p>
+
+        <section className="memgroup" aria-labelledby="keeper-loop-title">
+          <h2 id="keeper-loop-title" className="memhead mono">
+            Daily keeper loop
+          </h2>
+          <ul className="memlist">
+            <li className="memact">
+              <span className="memmeta mono">Inbox</span>
+              <span className="memactmsg">
+                {keeper.inboxCount === 0
+                  ? 'No captures waiting.'
+                  : `${keeper.inboxCount} capture${keeper.inboxCount === 1 ? '' : 's'} waiting to be filed.`}
+              </span>
+            </li>
+            <li className="memact">
+              <span className="memmeta mono">Last run</span>
+              <span className="memactmsg">
+                {keeper.lastAgentRunISO
+                  ? shortDateTime(keeper.lastAgentRunISO)
+                  : 'No agent-authored commit yet.'}
+              </span>
+            </li>
+            <li className="memact">
+              <span className="memmeta mono">Brief</span>
+              {keeper.latestBrief ? (
+                <Link
+                  className="memactmsg"
+                  href={`/?path=${encodeURIComponent(keeper.latestBrief.path)}`}
+                  title={keeper.latestBrief.path}
+                >
+                  {keeper.latestBrief.title}
+                  {keeper.latestBrief.excerpt ? ` - ${keeper.latestBrief.excerpt}` : ''}
+                </Link>
+              ) : (
+                <span className="memactmsg">No brief note found yet.</span>
+              )}
+            </li>
+            <li className="memact">
+              <span className="memmeta mono">Recent</span>
+              {activity[0] ? (
+                activity[0].path ? (
+                  <Link
+                    className="memactmsg"
+                    href={`/?path=${encodeURIComponent(activity[0].path)}`}
+                    title={activity[0].path}
+                  >
+                    {activity[0].action}
+                  </Link>
+                ) : (
+                  <span className="memactmsg">{activity[0].action}</span>
+                )
+              ) : (
+                <span className="memactmsg">No recent agent activity yet.</span>
+              )}
+            </li>
+          </ul>
+          <p className="memempty">
+            Next step: ask your connected agent to{' '}
+            <code>run the Agentkeep memory-keeper routine</code>. It files inbox
+            captures, updates <code>memory/</code>, links related notes, and writes
+            the brief when your routine asks for one.{' '}
+            <Link className="connect-link" href="/settings">
+              Connect or schedule it
+            </Link>
+          </p>
+        </section>
 
         {grouped.length === 0 ? (
           <div className="memempty">

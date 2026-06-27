@@ -1,7 +1,7 @@
 import 'server-only'
 
 import path from 'node:path'
-import { mkdir, stat } from 'node:fs/promises'
+import { mkdir, readdir, stat } from 'node:fs/promises'
 import {
   openVault,
   Indexer,
@@ -10,13 +10,9 @@ import {
   displayTitle,
   isCaptureBasename,
   readNote,
-  getMaker,
-  runAgentOnce,
-  approve as approveProposalCore,
-  dismissProposal as dismissProposalCore,
-  loadPendingProposals,
   captureToInbox,
   VaultPathError,
+  VaultGit,
   type Agentkeep,
   type Author,
   type HistoryEntry,
@@ -128,6 +124,86 @@ export type SetVaultResult =
   | { ok: true; root: string }
   | { ok: false; error: string }
 
+export type VaultPreflightResult =
+  | {
+      ok: true
+      root: string
+      needsConfirmation: boolean
+      hasAgentkeepMarker: boolean
+      hasGitRepo: boolean
+      hasRootGitignore: boolean
+      markdownCount: number
+    }
+  | { ok: false; error: string }
+
+async function pathExists(absPath: string): Promise<boolean> {
+  try {
+    await stat(absPath)
+    return true
+  } catch {
+    return false
+  }
+}
+
+async function countMarkdownFiles(root: string): Promise<number> {
+  let count = 0
+  const walk = async (absDir: string): Promise<void> => {
+    let entries
+    try {
+      entries = await readdir(absDir, { withFileTypes: true })
+    } catch {
+      return
+    }
+    for (const entry of entries) {
+      if (entry.name.startsWith('.')) continue
+      const abs = path.join(absDir, entry.name)
+      if (entry.isDirectory()) {
+        await walk(abs)
+      } else if (entry.name.toLowerCase().endsWith('.md')) {
+        count += 1
+      }
+    }
+  }
+  await walk(root)
+  return count
+}
+
+/** Read-only check used by Settings before `openVault` mutates a folder. */
+export async function preflightActiveVault(rawPath: string): Promise<VaultPreflightResult> {
+  const input = (rawPath ?? '').trim()
+  if (input === '') return { ok: false, error: 'Enter the absolute path to a vault folder.' }
+  if (!path.isAbsolute(input)) {
+    return { ok: false, error: 'Use an absolute path (e.g. /home/you/MyVault).' }
+  }
+  const root = path.resolve(input)
+
+  try {
+    const info = await stat(root)
+    if (!info.isDirectory()) {
+      return { ok: false, error: 'That path is a file, not a folder. Point at the vault folder.' }
+    }
+  } catch {
+    return { ok: false, error: 'No folder at that path. Check it and try again.' }
+  }
+
+  const [hasAgentkeepMarker, hasRootGitignore, markdownCount, hasGitRepo] = await Promise.all([
+    pathExists(path.join(root, '.agentkeep', 'config.json')),
+    pathExists(path.join(root, '.gitignore')),
+    countMarkdownFiles(root),
+    new VaultGit(root).isRepo().catch(() => false),
+  ])
+
+  return {
+    ok: true,
+    root,
+    needsConfirmation: !hasAgentkeepMarker,
+    hasAgentkeepMarker,
+    hasGitRepo,
+    hasRootGitignore,
+    markdownCount,
+  }
+}
+
 /**
  * Point the app at a different vault folder and switch to it LIVE — no restart.
  *
@@ -207,9 +283,9 @@ export async function getActiveVaultInfo(): Promise<ActiveVaultInfo> {
 
 // ── Connect-your-agent facts (Settings page) ─────────────────────────────────
 // Everything the "Connect your agent" page shows is RESOLVED here from the real
-// environment — the actual vault path, the real `agentkeep-mcp` bin if it's been
-// built/linked, and whether the BYO key is set. No invented placeholders: if a
-// value can't be resolved we say so honestly rather than printing a fake one.
+// environment — the actual vault path and the real `agentkeep-mcp` bin if it's
+// been built/linked. No invented placeholders: if a value can't be resolved we
+// say so honestly rather than printing a fake one.
 
 export interface ConnectFacts {
   /** Absolute vault path the app is actually serving. */
@@ -347,6 +423,10 @@ export interface GraphPayload {
   links: GraphLink[]
 }
 
+function graphEdgeKey(a: string, b: string): string {
+  return JSON.stringify(a < b ? [a, b] : [b, a])
+}
+
 /**
  * The whole vault as a graph, straight from the live LinkGraph: every indexed
  * note is a node (`memory/*` colored as memory), every uncreated `[[target]]`
@@ -361,7 +441,7 @@ export async function getGraph(): Promise<GraphPayload> {
   const seen = new Set<string>()
   const addEdge = (a: string, b: string): void => {
     if (a === b) return // a self-link draws nothing useful
-    const key = a < b ? `${a} ${b}` : `${b} ${a}`
+    const key = graphEdgeKey(a, b)
     if (seen.has(key)) return
     seen.add(key)
     links.push({ source: a, target: b })
@@ -482,6 +562,73 @@ export async function getAgentActivity(): Promise<AgentActivityItem[]> {
     })
   }
   return items
+}
+
+export interface KeeperBrief {
+  path: string
+  title: string
+  excerpt: string
+  updatedISO: string | null
+}
+
+export interface KeeperLoopSummary {
+  inboxCount: number
+  lastAgentRunISO: string | null
+  recentActivity: AgentActivityItem[]
+  latestBrief: KeeperBrief | null
+}
+
+async function latestBrief(app: Agentkeep, paths: string[]): Promise<KeeperBrief | null> {
+  const candidates = paths.filter(
+    (p) => p.startsWith('brief/') || /(^|\/)[^/]*brief[^/]*\.md$/i.test(p),
+  )
+  let best: KeeperBrief | null = null
+  let bestMtime = -1
+  for (const p of candidates) {
+    let raw: string | null = null
+    let mtime = 0
+    try {
+      const [read, info] = await Promise.all([
+        app.core.read(p),
+        stat(await app.vault.resolveSafe(p)),
+      ])
+      raw = read?.content ?? null
+      mtime = info.mtimeMs
+    } catch {
+      continue
+    }
+    if (!raw) continue
+    const { body } = readNote(raw)
+    const item: KeeperBrief = {
+      path: p,
+      title: parseNote(p, raw).title,
+      excerpt: excerptOf(body),
+      updatedISO: mtime > 0 ? new Date(mtime).toISOString() : null,
+    }
+    if (mtime > bestMtime || (mtime === bestMtime && (!best || p.localeCompare(best.path) < 0))) {
+      best = item
+      bestMtime = mtime
+    }
+  }
+  return best
+}
+
+/** Lightweight daily keeper loop status for /memory. */
+export async function getKeeperLoopSummary(): Promise<KeeperLoopSummary> {
+  const { app } = await getVault()
+  const paths = await app.vault.listMarkdown()
+  const inboxCount = paths.filter((p) => p.startsWith('inbox/')).length
+  const [lastAgentRun, recentActivity, brief] = await Promise.all([
+    lastAgentRunISO(),
+    getAgentActivity(),
+    latestBrief(app, paths),
+  ])
+  return {
+    inboxCount,
+    lastAgentRunISO: lastAgentRun,
+    recentActivity,
+    latestBrief: brief,
+  }
 }
 
 export interface LoadedNote {
@@ -785,69 +932,10 @@ async function resolveImageBasename(basename: string): Promise<string | null> {
   return found.sort()[0]! // deterministic on ambiguity (matches link resolution)
 }
 
-// ── Agent loop data layer ────────────────────────────────────────────────────
-// The propose→approve loop, wired over the same vault/core/indexer the editor
-// uses. The maker is the core's getMaker() (the deterministic MockMaker, which
-// files inbox captures mechanically). Every mutation here is git-reversible (the
-// agent writes as `author:'agent'`), which is what `undoLastAgentChange` leans on.
-
-/** Run the agent once: read inbox+tasks, persist proposals. Returns the count. */
-export async function runAgent(): Promise<{ proposals: number }> {
-  const { app, indexer } = await getVault()
-  const maker = getMaker()
-  const { proposals } = await runAgentOnce({ vault: app.vault, core: app.core, indexer, maker })
-  return { proposals: proposals.length }
-}
-
-/**
- * Approve a pending proposal: apply its ops as the agent, reindex, clear it.
- * When apply stops early (`applied:false`) the stopping error's name/message
- * ride along so the UI can tell an EXPECTED propose-time-CAS conflict
- * (ConflictError — the vault changed under the proposal, nothing overwritten)
- * apart from a real failure. Error objects don't cross the server-action
- * boundary, hence the plain-string fields.
- */
-export async function approvePending(
-  id: string,
-): Promise<{ applied: boolean; errorName?: string; errorMessage?: string }> {
-  const { app, indexer } = await getVault()
-  const result = await approveProposalCore({ vault: app.vault, core: app.core, indexer, maker: getMaker() }, id)
-  if (result.applied) return { applied: true }
-  return { applied: false, errorName: result.error?.name, errorMessage: result.error?.message }
-}
-
-/** Dismiss a pending proposal (drop it from pending — no vault mutation). */
-export async function dismissPending(id: string): Promise<void> {
-  const { app } = await getVault()
-  await dismissProposalCore(app.vault, id)
-}
-
-export type UndoResult =
-  | { ok: true; reverted: string }
-  | { ok: false; reason: string }
-
-/**
- * Undo the agent's most recent change by reverting its latest agent-authored
- * commit (a NEW inverse commit — history is never rewritten). If the vault's
- * most recent change isn't the agent's (a human edited after the agent, or the
- * agent never wrote), this is a no-op with a friendly reason — an undo must
- * never silently revert a human's own work.
- */
-export async function undoLastAgentChange(): Promise<UndoResult> {
-  const { app, indexer } = await getVault()
-  const head = await app.git.headCommit()
-  if (head === null) return { ok: false, reason: 'Nothing to undo yet.' }
-  if (head.authorName !== 'agentkeep-agent') {
-    return { ok: false, reason: 'The latest change is yours, not the agent’s — nothing to undo.' }
-  }
-  try {
-    const reverted = await app.git.revertCommit(head.sha)
-    await indexer.reindexAll()
-    return { ok: true, reverted }
-  } catch (err) {
-    return { ok: false, reason: `Couldn’t undo cleanly: ${(err as Error).message}` }
-  }
-}
+// ── Capture + agent-activity data layer ──────────────────────────────────────
+// Capture drops human-attributed text into the inbox over the same write-core
+// the editor uses; the connected agent files it from there. `lastAgentRunISO`
+// reads the agent's most recent commit for the rail's "last run" signal.
 
 /** Capture raw text into the inbox as the human, then reindex that file. */
 export async function captureToVault(text: string): Promise<{ path: string } | { error: string }> {
@@ -859,12 +947,6 @@ export async function captureToVault(text: string): Promise<{ path: string } | {
   })
   await indexer.reindexFile(relPath)
   return { path: relPath }
-}
-
-/** Pending proposals straight from app-state (what the proposal board shows). */
-export async function getPendingProposals() {
-  const { app } = await getVault()
-  return loadPendingProposals(app.vault)
 }
 
 /**

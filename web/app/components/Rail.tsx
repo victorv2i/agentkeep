@@ -97,7 +97,7 @@ export function Rail({
   const pathname = usePathname()
   const lastRun = lastRunISO ? relTime(lastRunISO) : null
   return (
-    <aside className="rail">
+    <aside className="rail" aria-label="App navigation">
       <Link className="brand" href="/">
         <svg className="brandmark" viewBox="0 0 32 32" width="30" height="30" fill="none" aria-hidden="true">
           {/* an open book — your vault, a thing you actually read */}
@@ -118,11 +118,16 @@ export function Rail({
           <span className="railvault-name">{vaultName}</span>
         </Link>
       ) : null}
-      <nav className="nav">
+      <nav className="nav" aria-label="Primary">
         {NAV.map((n) => {
           const cur = n.href === '/' ? pathname === '/' : pathname.startsWith(n.href)
           return (
-            <Link key={n.href} className={cur ? 'cur' : undefined} href={n.href}>
+            <Link
+              key={n.href}
+              className={cur ? 'cur' : undefined}
+              href={n.href}
+              aria-current={cur ? 'page' : undefined}
+            >
               <span className="g">
                 <NavIcon name={n.icon} />
               </span>

@@ -54,6 +54,11 @@ function commitEnv(extra: Record<string, string>): NodeJS.ProcessEnv {
   return { ...env, ...extra }
 }
 
+function pathspec(relPath: string): string[] {
+  if (relPath.includes('\0')) throw new Error('Git path cannot contain NUL')
+  return ['--', relPath]
+}
+
 export class VaultGit {
   private git: SimpleGit
   // Repo-wide lock: git stages into a single `.git/index` and updates one HEAD
@@ -88,11 +93,16 @@ export class VaultGit {
       // without staging it first. The commit pathspec then scopes the commit to
       // exactly this path (so a concurrent file staged by another caller's
       // `add` does not ride along on this commit).
-      await this.git.add(relPath)
-      const res = await this.git
-        .env(commitEnv({ GIT_AUTHOR_NAME: id.name, GIT_AUTHOR_EMAIL: id.email, GIT_COMMITTER_NAME: id.name, GIT_COMMITTER_EMAIL: id.email }))
-        .commit(opts.message, [relPath])
-      return res.commit
+      try {
+        await this.git.raw(['add', ...pathspec(relPath)])
+        await this.git
+          .env(commitEnv({ GIT_AUTHOR_NAME: id.name, GIT_AUTHOR_EMAIL: id.email, GIT_COMMITTER_NAME: id.name, GIT_COMMITTER_EMAIL: id.email }))
+          .raw(['commit', '--message', opts.message, ...pathspec(relPath)])
+        return await this.headSha()
+      } catch (err) {
+        await this.unstagePathUnlocked(relPath).catch(() => {})
+        throw err
+      }
     })
   }
 
@@ -106,20 +116,37 @@ export class VaultGit {
   async removePath(relPath: string, opts: { author: Author; message: string }): Promise<string> {
     const id = IDENTITY[opts.author]
     return this.repoLock.runExclusive(async () => {
-      await this.git.rm(relPath)
-      const res = await this.git
-        .env(commitEnv({ GIT_AUTHOR_NAME: id.name, GIT_AUTHOR_EMAIL: id.email, GIT_COMMITTER_NAME: id.name, GIT_COMMITTER_EMAIL: id.email }))
-        .commit(opts.message, [relPath])
-      return res.commit
+      try {
+        await this.git.raw(['rm', ...pathspec(relPath)])
+        await this.git
+          .env(commitEnv({ GIT_AUTHOR_NAME: id.name, GIT_AUTHOR_EMAIL: id.email, GIT_COMMITTER_NAME: id.name, GIT_COMMITTER_EMAIL: id.email }))
+          .raw(['commit', '--message', opts.message, ...pathspec(relPath)])
+        return await this.headSha()
+      } catch (err) {
+        await this.unstagePathUnlocked(relPath).catch(() => {})
+        throw err
+      }
     })
+  }
+
+  /** Clear any staged change for one path, preserving the working-tree bytes. */
+  async unstagePath(relPath: string): Promise<void> {
+    return this.repoLock.runExclusive(() => this.unstagePathUnlocked(relPath))
   }
 
   /** Most recent commit touching a path, or null. */
   async lastCommit(relPath: string): Promise<CommitInfo | null> {
-    const log = await this.git.log({ file: relPath, maxCount: 1 })
-    const c = log.latest
-    if (!c) return null
-    return { sha: c.hash, message: c.message, authorName: c.author_name }
+    let raw: string
+    try {
+      raw = await this.git.raw(['log', '--max-count=1', '--format=%H%x1f%s%x1f%an', ...pathspec(relPath)])
+    } catch {
+      return null
+    }
+    const line = raw.split('\n').find((l) => l.trim() !== '')
+    if (!line) return null
+    const [sha, message, authorName] = line.split('\x1f')
+    if (!sha || !authorName) return null
+    return { sha, message: message ?? '', authorName }
   }
 
   /**
@@ -150,25 +177,29 @@ export class VaultGit {
   async noteHistory(relPath: string, limit = 10): Promise<HistoryEntry[]> {
     // `%aI` = strict-ISO author date; simple-git's log() carries name+message+hash
     // but not the date in a stable field, so request it explicitly here.
-    let log
+    let raw: string
     try {
-      log = await this.git.log({
-        file: relPath,
-        maxCount: limit,
-        format: { sha: '%H', author: '%an', message: '%s', dateISO: '%aI' },
-      })
+      raw = await this.git.raw([
+        'log',
+        '--max-count=' + String(limit),
+        '--format=%H%x1f%an%x1f%s%x1f%aI',
+        ...pathspec(relPath),
+      ])
     } catch {
       // A repo with NO commits yet (`branch does not have any commits`) — there
       // is no history to read. An untracked path on a non-empty repo already
       // returns an empty log; this only guards the truly-empty case.
       return []
     }
-    return log.all.map((c) => ({
-      sha: c.sha,
-      author: authorFromName(c.author) ?? 'human',
-      message: c.message,
-      dateISO: c.dateISO,
-    }))
+    return raw.split('\n').filter((line) => line.trim() !== '').map((line) => {
+      const [sha, author, message, dateISO] = line.split('\x1f')
+      return {
+        sha: sha!,
+        author: authorFromName(author) ?? 'human',
+        message: message ?? '',
+        dateISO: dateISO ?? '',
+      }
+    })
   }
 
   /** HEAD commit (the most recent change to the vault), or null on an empty repo. */
@@ -275,5 +306,19 @@ export class VaultGit {
         .commit(message)
       return res.commit
     })
+  }
+
+  private async headSha(): Promise<string> {
+    return (await this.git.raw(['rev-parse', 'HEAD'])).trim()
+  }
+
+  private async unstagePathUnlocked(relPath: string): Promise<void> {
+    try {
+      await this.git.raw(['reset', ...pathspec(relPath)])
+    } catch {
+      // `git reset -- <path>` needs HEAD. On an unborn branch, remove the path
+      // from the index directly; no-op if it was never staged.
+      await this.git.raw(['rm', '--cached', '--ignore-unmatch', ...pathspec(relPath)])
+    }
   }
 }

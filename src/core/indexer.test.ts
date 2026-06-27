@@ -103,4 +103,17 @@ describe('Indexer (rebuildable from files)', () => {
     await write('notes/Bad.md', '---\ntitle: "unterminated\n---\n# Bad\n')
     await expect(indexer.reindexFile('notes/Bad.md')).resolves.not.toThrow()
   })
+
+  it('reindexFile removes stale old entries when an indexed file becomes malformed', async () => {
+    await indexer.reindexAll()
+    expect(indexer.search('apple').map((r) => r.path)).toContain('notes/A.md')
+    expect(indexer.getLinks('notes/A.md')).toContain('notes/B.md')
+
+    await write('notes/A.md', '---\ntitle: "unterminated\n---\n# Broken\n')
+    await expect(indexer.reindexFile('notes/A.md')).resolves.not.toThrow()
+
+    expect(indexer.search('apple').map((r) => r.path)).not.toContain('notes/A.md')
+    expect(indexer.getLinks('notes/A.md')).toEqual([])
+    expect(indexer.notePaths()).not.toContain('notes/A.md')
+  })
 })

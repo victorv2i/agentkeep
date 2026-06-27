@@ -6,6 +6,8 @@ import { Vault } from './vault.js'
 import { Indexer } from './indexer.js'
 import { VaultWatcher } from './watcher.js'
 import { contentHash } from './hash.js'
+import { VaultGit } from './git.js'
+import { WriteCore } from './write-core.js'
 
 let dir: string
 let vault: Vault
@@ -81,6 +83,27 @@ describe('VaultWatcher.handleEvent (pure, no real FS timing)', () => {
     const w = new VaultWatcher(vault, indexer, { isSelfWrite: () => true })
     await w.handleEvent('unlink', 'notes/Gone.md')
     expect(remove).toHaveBeenCalledWith('notes/Gone.md')
+  })
+
+  it('consumes a stale self-write marker so external A->B->A edits still reindex', async () => {
+    const git = new VaultGit(dir)
+    await git.ensureRepo()
+    const core = new WriteCore(vault, git)
+    await core.write('notes/S.md', '# A\n', { author: 'agent', baseHash: null })
+
+    const indexer = new Indexer(vault)
+    const reindex = vi.spyOn(indexer, 'reindexFile')
+    const w = new VaultWatcher(vault, indexer, {
+      isSelfWrite: (path, hash) => core.isSelfWrite(path, hash),
+    })
+
+    await write('notes/S.md', '# B\n')
+    await w.handleEvent('change', 'notes/S.md')
+    expect(reindex).toHaveBeenCalledTimes(1)
+
+    await write('notes/S.md', '# A\n')
+    await w.handleEvent('change', 'notes/S.md')
+    expect(reindex).toHaveBeenCalledTimes(2)
   })
 })
 

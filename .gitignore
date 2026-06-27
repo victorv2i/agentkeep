@@ -17,3 +17,5 @@ dev-vault/
 # live render screenshots from the smoke tests (regenerable; not source)
 web/*.png
 web/tsconfig.tsbuildinfo
+# dev-only Playwright/screenshot harnesses (kept on disk, not shipped)
+/dev/

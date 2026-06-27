@@ -41,6 +41,8 @@ export function SearchClient({ recent }: { recent: RecentNote[] }) {
   const [hits, setHits] = useState<Hit[]>([])
   const [total, setTotal] = useState(0)
   const [searched, setSearched] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+  const [retryKey, setRetryKey] = useState(0)
   const reqId = useRef(0)
 
   useEffect(() => {
@@ -49,29 +51,34 @@ export function SearchClient({ recent }: { recent: RecentNote[] }) {
       setHits([])
       setTotal(0)
       setSearched(false)
+      setError(null)
       return
     }
     const id = ++reqId.current
+    setError(null)
     // 110ms: long enough to coalesce a keystroke burst, short enough that the
     // debounce (not the ~3ms API) never reads as latency.
     const t = setTimeout(async () => {
       try {
         const res = await fetch(`/api/search?q=${encodeURIComponent(query)}`)
+        if (!res.ok) throw new Error(`Search failed with ${res.status}`)
         const data = (await res.json()) as { hits: Hit[]; total: number }
         // Ignore a stale response if a newer keystroke already fired.
         if (id !== reqId.current) return
         setHits(data.hits)
         setTotal(data.total)
         setSearched(true)
+        setError(null)
       } catch {
         if (id !== reqId.current) return
         setHits([])
         setTotal(0)
         setSearched(true)
+        setError('Search could not load. Check the vault and try again.')
       }
     }, 110)
     return () => clearTimeout(t)
-  }, [q])
+  }, [q, retryKey])
 
   return (
     <div className="search">
@@ -103,6 +110,13 @@ export function SearchClient({ recent }: { recent: RecentNote[] }) {
             </>
           ) : null}
         </>
+      ) : error ? (
+        <div className="searcherror" role="status" aria-live="polite">
+          <p>{error}</p>
+          <button type="button" onClick={() => setRetryKey((n) => n + 1)}>
+            Try again
+          </button>
+        </div>
       ) : hits.length > 0 ? (
         <>
           <p className="sr-count">

@@ -64,6 +64,38 @@ export async function initVault(absPath: string): Promise<string[]> {
   return created
 }
 
+export function tailscaleServeArgs(port: number): string[] {
+  return ['serve', '--bg', '--https=443', `http://127.0.0.1:${port}`]
+}
+
+export function tailscaleServeOffArgs(): string[] {
+  return ['serve', '--https=443', 'off']
+}
+
+export interface WaitForHttpReadyOpts {
+  timeoutMs?: number
+  intervalMs?: number
+  shouldStop?: () => boolean
+}
+
+export async function waitForHttpReady(url: string, opts: WaitForHttpReadyOpts = {}): Promise<boolean> {
+  const timeoutMs = opts.timeoutMs ?? 15_000
+  const intervalMs = opts.intervalMs ?? 250
+  const deadline = Date.now() + timeoutMs
+  while (Date.now() < deadline) {
+    if (opts.shouldStop?.()) return false
+    const remaining = deadline - Date.now()
+    try {
+      const res = await fetch(url, { signal: AbortSignal.timeout(Math.min(1_000, Math.max(1, remaining))) })
+      if (res.status < 500) return true
+    } catch {
+      // Not listening yet — keep polling until the deadline.
+    }
+    await new Promise((resolve) => setTimeout(resolve, Math.min(intervalMs, Math.max(1, deadline - Date.now()))))
+  }
+  return false
+}
+
 async function exists(p: string): Promise<boolean> {
   try {
     await stat(p)

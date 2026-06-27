@@ -1,6 +1,7 @@
 import { WriteCore } from './write-core.js'
 import { setFrontmatterKey } from './frontmatter.js'
 import { newId } from './ids.js'
+import { ConflictError } from './errors.js'
 
 /**
  * Fixed placeholder timestamp for a capture with no caller-supplied `createdISO`.
@@ -26,6 +27,8 @@ export interface CaptureResult {
  * `baseHash:null` (expect-create) — capture is always a human action, never the
  * agent. Frontmatter (`id`, `created`, `type: capture`) is built with the
  * format-preserving `setFrontmatterKey` (the only sanctioned frontmatter writer).
+ * If the content-derived file already exists, capture is idempotent: return the
+ * same `{path,id}` without changing the existing capture's timestamp/body.
  */
 export async function captureToInbox(
   core: WriteCore,
@@ -41,6 +44,12 @@ export async function captureToInbox(
   content = setFrontmatterKey(content, 'created', created)
   content = setFrontmatterKey(content, 'type', 'capture')
 
-  await core.write(path, content, { author: 'human', baseHash: null })
+  if ((await core.read(path)) !== null) return { path, id }
+  try {
+    await core.write(path, content, { author: 'human', baseHash: null })
+  } catch (err) {
+    if (err instanceof ConflictError && (await core.read(path)) !== null) return { path, id }
+    throw err
+  }
   return { path, id }
 }

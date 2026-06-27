@@ -1,6 +1,6 @@
-// Seed ./dev-vault with real notes + tasks + a north-star + a pending proposal so
-// the Brief home page renders genuine core data (not hardcoded). Idempotent-ish:
-// removes any existing dev-vault first for a clean, deterministic seed.
+// Seed ./dev-vault with real notes + tasks + a north-star so the web app renders
+// genuine core data (not hardcoded). Idempotent-ish: removes any existing
+// dev-vault first for a clean, deterministic seed.
 //
 // Run from the repo root: `node web/scripts/seed-dev-vault.mjs`
 // (it imports the core source directly, the same module the web app uses.)
@@ -16,7 +16,6 @@ import { fileURLToPath } from 'node:url'
 import {
   openVault,
   writeTask,
-  savePendingProposals,
 } from '../../dist/core/index.js'
 
 const here = path.dirname(fileURLToPath(import.meta.url))
@@ -45,7 +44,7 @@ await mkdir(root, { recursive: true })
 execFileSync('git', ['init', '-q', root], { stdio: 'inherit' })
 
 const app = await openVault(root)
-const { core, vault } = app
+const { core } = app
 
 async function note(rel, body) {
   await core.write(rel, body.endsWith('\n') ? body : body + '\n', {
@@ -101,7 +100,7 @@ Worth raising when you write today.
 `,
 )
 
-// A captured-last-night note the pending proposal wants to file.
+// A captured-last-night inbox note your connected agent would file from here.
 await note(
   'inbox/coffee-notion-pm.md',
   `---
@@ -174,7 +173,7 @@ It is the home page and the lead of every demo — central to the [[Launch plan]
 // ── Editor parity demo: exercises EVERY live-preview render ──────────────────
 // Lists, tasks, blockquote, rule, inline image, `![[image]]` embed, markdown
 // link, `[[Note#Heading]]` anchor link, GFM table, and an `![[note]]` embed.
-// Backs `web/editor-parity-check.py` (the Obsidian-parity render verification).
+// Backs `dev/web/editor-parity-check.py` (the Obsidian-parity render verification).
 // A tiny vault image (committed as bytes) feeds the inline + embed images.
 {
   const W = 64
@@ -341,24 +340,5 @@ await task({
   title: 'q3-invoice',
   status: 'doing',
 })
-
-// ── Pending proposal ("Needs your eyes") ────────────────────────────────────
-await savePendingProposals(vault, [
-  {
-    id: 'file-jordan-lee',
-    summary: 'File “coffee with the Notion PM” → people/jordan-lee',
-    rationale:
-      'You captured it last night. I’d tag it person/jordan-lee and link it to your north star. Nothing changes until you say so.',
-    source: 'inbox/coffee-notion-pm.md',
-    ops: [
-      {
-        kind: 'setFrontmatter',
-        path: 'inbox/coffee-notion-pm.md',
-        key: 'tags',
-        value: ['person/jordan-lee'],
-      },
-    ],
-  },
-])
 
 console.log(`seeded dev-vault at ${root} (date ${DATE})`)

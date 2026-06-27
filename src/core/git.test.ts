@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest'
-import { mkdtemp, rm, writeFile } from 'node:fs/promises'
+import { mkdtemp, rm, writeFile, readFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { VaultGit } from './git.js'
@@ -27,6 +27,28 @@ describe('VaultGit', () => {
     await g.commitChange('h.md', { author: 'human', message: 'human edit' })
     const last = await g.lastCommit('h.md')
     expect(last?.authorName).toBe('agentkeep-human')
+  })
+
+  it('treats leading-dash paths as pathspecs, not git options', async () => {
+    const g = new VaultGit(dir)
+    await g.ensureRepo()
+    await writeFile(join(dir, '--all'), 'literal dash path\n')
+
+    const sha = await g.commitChange('--all', { author: 'agent', message: 'agent: dash path' })
+    expect(sha).toMatch(/^[0-9a-f]{7,40}$/)
+    expect(await readFile(join(dir, '--all'), 'utf8')).toBe('literal dash path\n')
+
+    const last = await g.lastCommit('--all')
+    expect(last?.message).toBe('agent: dash path')
+    expect(last?.authorName).toBe('agentkeep-agent')
+
+    const del = await g.removePath('--all', { author: 'agent', message: 'agent: delete dash path' })
+    expect(del).toMatch(/^[0-9a-f]{7,40}$/)
+    await expect(readFile(join(dir, '--all'), 'utf8')).rejects.toMatchObject({ code: 'ENOENT' })
+    expect((await g.noteHistory('--all')).map((h) => h.message)).toEqual([
+      'agent: delete dash path',
+      'agent: dash path',
+    ])
   })
 
   it('lastAgentCommit finds the latest agent commit, skipping later human ones', async () => {

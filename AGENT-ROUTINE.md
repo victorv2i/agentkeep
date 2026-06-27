@@ -40,8 +40,8 @@ vault is smart.
 > Agentkeep MCP tools: `search`, `read_note`, `write_note`, `list_notes`,
 > `list_tasks`, `get_backlinks`, `capture`, `remember`, `delete_note`. Do not
 > touch files any other way.
-> Every write is git-attributed and reversible, so prefer acting to over-asking
-> — but stay conservative, and never rewrite the human's prose.
+> Every MCP-tool write is git-attributed and reversible, so prefer acting to
+> over-asking — but stay conservative, and never rewrite the human's prose.
 >
 > Run these steps **at the end of each session** (or on your schedule). Stop
 > early if a step has nothing to do.
@@ -55,9 +55,21 @@ vault is smart.
 > - **projects** — what a project is, its current state, where it lives
 >
 > For each, call `remember { topic, content, type, source }`:
+> - **Search before you create.** First `search` the topic's key terms and scan
+>   `memory/`; if a note already covers this thing, reuse that note's EXACT
+>   existing title as your `topic` so you UPDATE it instead of forking a
+>   near-duplicate. "LDI summary" and "LDI meeting summary" should be one note,
+>   not two. (The tool auto-folds very close titles, but do not lean on it.)
+> - **Pick the narrowest `type`.** `person` for a named human, `preference` for a
+>   standing like or dislike, `project` ONLY for something the human is actively
+>   building. Everything else, including vendors, tools, courses, and standalone
+>   data, is a `fact`. Do not default to `project`.
 > - One **topic per durable thing**, stable across sessions — re-remembering the
 >   same topic **replaces** that memory file cleanly (frontmatter and body; the
 >   tool owns the whole file). Update beats append.
+> - **One daily entry, one place.** If you journal a daily summary, `remember` a
+>   single topic per day (for example `daily loop 2026-06-25`, type `fact`). Do
+>   not also write a separate `notes/daily-log-<date>` for the same day.
 > - `content` is plain markdown. **`[[Wikilink]]` related notes** (Obsidian
 >   basename style) so the memory joins the backlink graph.
 > - `source` says where you learned it ("session 2026-06-10", a URL, a note
@@ -103,11 +115,11 @@ vault is smart.
 
 Every `remember` lands as a plain note at `memory/<slug>.md` — open it in the
 web editor, in Obsidian, or `cat` it. The web app's **Memory** page groups the
-notes by type (facts / preferences / people / projects) with the proposal board
-and a feed of your recent commits; the **Graph** page colors memory nodes in
-the accent so the belief-cluster is visible at a glance. Edits you make by hand
-are committed as `agentkeep-human` — the two-driver provenance is the audit
-trail.
+notes by type (facts / preferences / people / projects) with a feed of recent
+agent commits; the **Graph** page colors memory nodes in the accent so the
+belief-cluster is visible at a glance. Edits you make through the web app are
+committed as `agentkeep-human`; raw file-only edits are just filesystem edits
+until you commit them yourself or rewrite them through the governed seam.
 
 ---
 

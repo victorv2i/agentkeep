@@ -49,4 +49,17 @@ describe('captureToInbox', () => {
     expect(await core.read(a.path)).not.toBeNull()
     expect(await core.read(b.path)).not.toBeNull()
   })
+
+  it('capturing identical text is idempotent and does not rewrite the existing capture', async () => {
+    const first = await captureToInbox(core, 'same thought', { createdISO: '2026-06-08T09:00:00Z' })
+    const second = await captureToInbox(core, 'same thought', { createdISO: '2026-06-09T10:00:00Z' })
+
+    expect(second).toEqual(first)
+    const r = await core.read(first.path)
+    expect(r).not.toBeNull()
+    const { data, body } = readNote(r!.content)
+    expect(data.created).toBe('2026-06-08T09:00:00Z')
+    expect(body.trim()).toBe('same thought')
+    expect(await git.noteHistory(first.path)).toHaveLength(1)
+  })
 })

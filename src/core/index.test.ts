@@ -3,7 +3,7 @@ import { mkdtemp, rm, mkdir, writeFile, readFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { simpleGit } from 'simple-git'
-import { openVault } from './index.js'
+import { openVault, VaultGit } from './index.js'
 
 let dir: string
 beforeEach(async () => { dir = await mkdtemp(join(tmpdir(), 'ak-open-')) })
@@ -64,5 +64,45 @@ describe('openVault', () => {
 
     // The user's own ignore rules are honored verbatim — never clobbered/appended.
     expect(await readFile(join(dir, '.gitignore'), 'utf8')).toBe(existing)
+  })
+
+  it('refuses an existing dirty git vault before writing metadata or committing unrelated work', async () => {
+    await mkdir(join(dir, 'notes'), { recursive: true })
+    await writeFile(join(dir, 'notes', 'tracked.md'), '# Seed\n')
+    const g = new VaultGit(dir)
+    await g.ensureRepo()
+    await g.commitChange('notes/tracked.md', { author: 'human', message: 'seed tracked note' })
+
+    await writeFile(join(dir, 'notes', 'tracked.md'), '# Changed outside agentkeep\n')
+    await writeFile(join(dir, 'notes', 'untracked.md'), '# Untracked outside agentkeep\n')
+
+    await expect(openVault(dir)).rejects.toThrow(/Refusing to open an existing git vault/)
+
+    const status = await simpleGit(dir).raw(['status', '--porcelain=v1', '--untracked-files=all'])
+    expect(status).toContain('notes/tracked.md')
+    expect(status).toContain('notes/untracked.md')
+    await expect(readFile(join(dir, '.agentkeep/config.json'), 'utf8')).rejects.toThrow()
+
+    const log = await simpleGit(dir).log()
+    expect(log.all.map((c) => c.message)).toEqual(['seed tracked note'])
+  })
+
+  it('opens a clean existing git vault by committing only Agentkeep metadata', async () => {
+    await mkdir(join(dir, 'notes'), { recursive: true })
+    await writeFile(join(dir, 'notes', 'tracked.md'), '# Seed\n')
+    const g = new VaultGit(dir)
+    await g.ensureRepo()
+    await g.commitChange('notes/tracked.md', { author: 'human', message: 'seed tracked note' })
+
+    await openVault(dir)
+
+    const tracked = (await simpleGit(dir).raw(['ls-files'])).split('\n').filter(Boolean)
+    expect(tracked).toContain('notes/tracked.md')
+    expect(tracked).toContain('.agentkeep/config.json')
+    expect(tracked).toContain('.agentkeep/.gitignore')
+
+    const messages = (await simpleGit(dir).log()).all.map((c) => c.message)
+    expect(messages).not.toContain('baseline: agentkeep opened vault')
+    expect(messages.filter((m) => m === 'agentkeep: initialize vault metadata')).toHaveLength(2)
   })
 })

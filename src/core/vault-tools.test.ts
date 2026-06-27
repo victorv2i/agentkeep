@@ -206,6 +206,21 @@ describe('createVaultTools', () => {
     expect(paths).toContain(path)
   })
 
+  it('capture is idempotent through the tool handler for duplicate text', async () => {
+    const first = await call('capture', { text: 'duplicate tool capture' })
+    const second = await call('capture', { text: 'duplicate tool capture' })
+    expect(first.ok).toBe(true)
+    expect(second.ok).toBe(true)
+    if (!first.ok || !second.ok) return
+
+    expect(second.data).toEqual(first.data)
+    const path = (first.data as { path: string }).path
+    const list = await call('list_notes', {})
+    expect(list.ok).toBe(true)
+    if (!list.ok) return
+    expect((list.data as string[]).filter((p) => p === path)).toHaveLength(1)
+  })
+
   it('delete_note removes an existing note, commits as agent, and drops it from the index', async () => {
     // capture an inbox note (indexed), then delete it through the tool
     const c = await call('capture', { text: 'an inbox note about flibbergib to be filed then deleted' })
@@ -290,6 +305,44 @@ describe('createVaultTools', () => {
     const s = await call('search', { query: 'Zed' })
     expect(s.ok).toBe(true)
     if (s.ok) expect((s.data as Array<{ path: string }>).map((h) => h.path)).toContain('memory/editor.md')
+  })
+
+  it('remember folds a reworded near-duplicate topic into the existing note instead of forking', async () => {
+    // First remember establishes + indexes the canonical note.
+    await call('remember', { topic: 'LDI team meeting summary', content: 'The original summary.', source: 'cron' })
+    // A reworded topic (one extra filler word) must UPDATE that file, not fork a
+    // second memory/ldi-team-meeting-ultimate-summary.md. Title-token Jaccard 4/5 = 0.8.
+    const r = await call('remember', {
+      topic: 'LDI team meeting ultimate summary',
+      content: 'The fuller summary that supersedes.',
+      source: 'cron',
+    })
+    expect(r.ok).toBe(true)
+    if (!r.ok) return
+    expect((r.data as { path: string; merged?: boolean }).path).toBe('memory/ldi-team-meeting-summary.md')
+    expect((r.data as { merged?: boolean }).merged).toBe(true)
+    // exactly ONE ldi-team-meeting note exists (no fork)
+    const list = await call('list_notes', {})
+    expect(list.ok).toBe(true)
+    if (!list.ok) return
+    expect((list.data as string[]).filter((p) => p.startsWith('memory/ldi-team-meeting'))).toEqual([
+      'memory/ldi-team-meeting-summary.md',
+    ])
+    // and it holds the superseding content
+    const onDisk = await ak.core.read('memory/ldi-team-meeting-summary.md')
+    expect(onDisk!.content).toContain('supersedes')
+    expect(onDisk!.content).not.toContain('The original summary')
+  })
+
+  it('remember keeps a merely-related topic as its own note (does not over-merge)', async () => {
+    await call('remember', { topic: 'Agent Deck', content: 'The product.', type: 'project' })
+    // {agent,deck} vs {agent,deck,status} Jaccard = 0.67 < 0.8 → stays a distinct note.
+    const r = await call('remember', { topic: 'Agent Deck status', content: 'Shipped phase 3.', type: 'project' })
+    expect(r.ok).toBe(true)
+    if (!r.ok) return
+    expect((r.data as { path: string }).path).toBe('memory/agent-deck-status.md')
+    expect(await ak.core.read('memory/agent-deck.md')).not.toBeNull()
+    expect(await ak.core.read('memory/agent-deck-status.md')).not.toBeNull()
   })
 
   it('remember slugifies the topic (lowercase, non-alphanumerics collapse to single dashes)', async () => {
