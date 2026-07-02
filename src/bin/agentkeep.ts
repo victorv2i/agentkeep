@@ -6,26 +6,28 @@ import { stat } from 'node:fs/promises'
 import {
   parseLauncherArgs,
   initVault,
+  seedDemoMemory,
   tailscaleServeArgs,
   tailscaleServeOffArgs,
   waitForHttpReady,
 } from './launcher.js'
 
 /**
- * The one-line `agentkeep` launcher (self-host model — runs from the repo
+ * The one-line `agentkeep` launcher (self-host model, runs from the repo
  * checkout). Wraps what the README walks people through by hand: build the web
  * app, start it on a vault, optionally expose it over the tailnet.
  */
-const HELP = `agentkeep — self-hosted vault launcher (runs from the repo checkout)
+const HELP = `agentkeep: self-hosted vault launcher (runs from the repo checkout)
 
   agentkeep init <path>               create a vault skeleton (inbox/, memory/)
+  agentkeep demo <path> [--force]     add fictional demo memory notes
   agentkeep open <path> [--port N]    build (if needed) + serve the web app on this vault
   agentkeep serve <path> --tailscale  open + expose over your tailnet via 'tailscale serve'
 
 Point your agent at the same vault with: agentkeep-mcp <path>
 `
 
-// dist/bin/agentkeep.js → repo root is two levels up
+// dist/bin/agentkeep.js to repo root is two levels up
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), '../..')
 
 async function main(): Promise<void> {
@@ -45,10 +47,16 @@ async function main(): Promise<void> {
     return
   }
 
+  if (args.cmd === 'demo') {
+    const written = await seedDemoMemory(vault, { force: args.force })
+    process.stdout.write(`Wrote ${written.length} fictional demo memory notes in ${join(vault, 'memory')}\n`)
+    return
+  }
+
   // open / serve: ensure the web app is built, then start it on this vault.
   const webDir = join(repoRoot, 'web')
   // The web app ships only with the git checkout, not the npm package (which is
-  // the MCP seam + bins). If web/ is absent, this is an npm install — point the
+  // the MCP server + bins). If web/ is absent, this is an npm install, point the
   // user at the checkout instead of failing on a confusing build error.
   const webExists = await stat(webDir).then(() => true, () => false)
   if (!webExists) {
@@ -56,7 +64,7 @@ async function main(): Promise<void> {
       'The Agentkeep web app runs from a git checkout, not the npm package.\n' +
         '  git clone https://github.com/victorv2i/agentkeep && cd agentkeep\n' +
         '  pnpm install && pnpm -w build && node dist/bin/agentkeep.js open <vault>\n' +
-        'The `agentkeep-mcp <vault>` seam DOES work from npm — point your agent at that.\n',
+        'The `agentkeep-mcp <vault>` server works from npm, point your agent at that.\n',
     )
     process.exitCode = 1
     return
@@ -121,7 +129,7 @@ async function main(): Promise<void> {
     }
     const ts = spawnSync('tailscale', tailscaleServeArgs(args.port), { stdio: 'inherit' })
     if (ts.error || ts.status !== 0) {
-      process.stderr.write("Could not run 'tailscale serve' — is Tailscale installed and up? Serving locally only.\n")
+      process.stderr.write("Could not run 'tailscale serve'. Is Tailscale installed and up? Serving locally only.\n")
     } else {
       tailscaleActive = true
       process.stdout.write("Tailscale Serve is active; Agentkeep will remove the HTTPS 443 route when the app exits.\n")

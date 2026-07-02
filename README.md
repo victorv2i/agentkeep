@@ -18,9 +18,9 @@ and you can open, read, and correct.
 
 ## What it is
 
-Your agent accumulates memory. Usually it lives in an opaque store you can't see or fix: SQLite vectors, a black-box SaaS. Agentkeep gives that memory a home you own.
+Your coding agent accumulates memory. Agentkeep gives that memory a home you own: plain files you can inspect and fix.
 
-Point your agent at the vault over an MCP seam and its memory becomes plain markdown notes under `memory/`. A web app shows **what your agent believes**, the whole vault as a **graph**, and a focused markdown editor with live `[[wikilinks]]`. Governed writes through MCP or the web app are content-hash guarded and git-committed, so the two of you can edit the same vault safely. Raw file-only agents can still write markdown, but they bypass that write-core. You own the files. Nothing to export, no lock-in.
+Your agent writes memories through MCP. Agentkeep saves them as plain markdown in `memory/`, shows them in Memory and Graph, and commits governed edits to git so you can undo or correct them. Raw file-only agents can still write markdown, but they skip that protected path. You own the files. Nothing to export, no lock-in.
 
 It is deliberately not magic. Agentkeep **stores and shows** memory; it does no embeddings and no recall ranking. Retrieving the right memory at the right moment is your agent's job. The point is that you can read, trust, and correct what your agent believes, in files you own.
 
@@ -37,7 +37,7 @@ An Obsidian-friendly editor with live `[[wikilinks]]`, backlinks, and per-note p
 
 ## How it works
 
-1. **Connect your agent** (Hermes, OpenClaw, or any MCP or file agent) to the vault.
+1. **Connect your agent** (any MCP client or file-capable agent) to the vault.
 2. **It writes memory.** Durable facts, preferences, people, and projects land as plain markdown via the `remember` tool; quick captures drop into `inbox/` for it to file.
 3. **You read and correct it.** Open the Memory page to see what your agent believes, fix anything stale or wrong, and watch the graph of linked notes grow.
 
@@ -66,12 +66,15 @@ pnpm -w build          # builds the core + the agentkeep / agentkeep-mcp bins
 # create a fresh vault (or point at your existing Obsidian vault)
 node dist/bin/agentkeep.js init ~/MyVault
 
+# optional: seed fictional demo memory for a non-empty first run
+node dist/bin/agentkeep.js demo ~/MyVault
+
 # run the web app
 node dist/bin/agentkeep.js open ~/MyVault                # http://localhost:3000
 node dist/bin/agentkeep.js serve ~/MyVault --tailscale   # ...and over your tailnet
 ```
 
-The published `@agentkeep/core` package contains the core library and MCP seam. It does not bundle the Next.js web app; use this git checkout for `open` / `serve`. If those web commands are run from an npm-only install, they fail with checkout instructions instead of pretending the web app is present.
+The published `@agentkeep/core` package contains the core library and MCP server. It does not bundle the Next.js web app; use this git checkout for `open` / `serve`. If those web commands are run from an npm-only install, they fail with checkout instructions instead of pretending the web app is present.
 
 `open` serves on localhost only. To reach it from your other devices, run `serve --tailscale` and let the tailnet be the auth boundary; the web app has no login of its own, so never expose the raw port on an untrusted network. `serve --tailscale` starts the local app first, waits for it to answer, then installs the Tailscale Serve route; on normal exit it removes the HTTPS 443 route again. If the process is killed hard, clean up with `tailscale serve --https=443 off`.
 
@@ -81,7 +84,7 @@ The published `@agentkeep/core` package contains the core library and MCP seam. 
 
 Point the agent you already run at the vault. **Settings → Connect** in the app generates copy-paste config with your real vault path filled in. The shapes:
 
-**Hermes** (`~/.hermes/config.yaml`):
+**Any MCP client** (YAML `mcp_servers` shape):
 
 ```yaml
 mcp_servers:
@@ -90,7 +93,7 @@ mcp_servers:
     args: ["/path/to/vault"]
 ```
 
-**Any MCP client** (the standard `mcpServers` map):
+**Any MCP client** (JSON `mcpServers` shape):
 
 ```json
 { "mcpServers": { "agentkeep": { "command": "agentkeep-mcp", "args": ["/path/to/vault"] } } }
@@ -100,7 +103,7 @@ mcp_servers:
 
 Then hand your agent the memory-keeper routine in [`AGENT-ROUTINE.md`](./AGENT-ROUTINE.md), a paste-in system prompt or skill. After each session (or on a schedule) it stores durable memory with `remember`, files your inbox, and wikilinks notes into the graph, using only the nine MCP tools.
 
-## The MCP seam
+## MCP tools
 
 `agentkeep-mcp <vault-path>` serves nine tools over stdio, each governed by the write-core:
 

@@ -10,21 +10,21 @@ import { listTasks } from './task.js'
 import { setFrontmatterKey } from './frontmatter.js'
 
 /**
- * Pure, SDK-free tool layer for the BYO-agent MCP seam (DESIGN §7.5). Each tool
+ * Pure, SDK-free tool layer for BYO-agent MCP tools (DESIGN §7.5). Each tool
  * is a self-contained handler over the Phase 1–3 core. This is the LOGIC; the
  * MCP/stdio wiring lives in `src/mcp/server.ts`, so these handlers are unit-
  * testable against a real temp vault without touching the SDK or stdio.
  *
- * The point of the seam: `write_note` writes go through `WriteCore` as
+ * The point of the tool layer: `write_note` writes go through `WriteCore` as
  * `author:'agent'` (hash-guarded compare-and-swap, atomic, git-committed,
  * attributed `agentkeep-agent`); `capture` is a human-attributed inbox drop
- * (`author:'human'`) the agent files later — also CAS + git. That governance —
- * undo, attribution, no clobber — is exactly what a raw "agent → files" setup
+ * (`author:'human'`) the agent files later, also CAS + git. That governance:
+ * undo, attribution, no clobber, is exactly what a raw "agent to files" setup
  * lacks. After each mutation the handler reindexes the written file so this
  * server's own `search`/`get_backlinks` stay fresh.
  */
 
-/** A handler result. `ok:false` never escapes a handler as a throw — it is a value. */
+/** A handler result. `ok:false` never escapes a handler as a throw, it is a value. */
 export type ToolResult =
   | { ok: true; data: unknown }
   | { ok: false; error: string; code?: number }
@@ -53,7 +53,7 @@ const ok = (data: unknown): ToolResult => ({ ok: true, data })
 const err = (error: string, code?: number): ToolResult => ({ ok: false, error, code })
 
 // Note-path guard for the note tools (read_note/write_note/delete_note): only
-// ordinary `.md` notes, PLUS the one documented exception — AGENT-ROUTINE.md
+// ordinary `.md` notes, PLUS the one documented exception: AGENT-ROUTINE.md
 // has the agent write tasks via `write_note` to `tasks/<id>.json` (a flat
 // path, see task.ts `taskPath`). Without this an MCP caller could point
 // read_note/write_note/delete_note at any in-vault file (assertVaultContentPath
@@ -91,7 +91,7 @@ const MEMORY_TYPES = ['fact', 'preference', 'person', 'project'] as const
 /**
  * Near-duplicate guard for `remember`. Topics get slugged into a filename, so a
  * reworded topic ("LDI team meeting summary" vs "...ultimate summary") slugs
- * differently and forks a second file — the recurring source of memory/ dupes.
+ * differently and forks a second file, the recurring source of memory/ dupes.
  * When a topic has no exact slug match, we compare its title tokens against the
  * existing memory notes and, only on a HIGH overlap, update that note instead of
  * forking. Conservative on purpose: under-merging (two near-twins kept) is a
@@ -177,7 +177,7 @@ export function createVaultTools(deps: VaultToolsDeps): VaultTool[] {
 
     {
       name: 'list_notes',
-      description: 'List every markdown note in the vault (vault-relative paths, sorted).',
+      description: 'List markdown notes only, returned as sorted vault-relative paths. Task JSON is listed by list_tasks.',
       inputSchema: {},
       async handler() {
         return ok(await vault.listMarkdown())
@@ -204,7 +204,7 @@ export function createVaultTools(deps: VaultToolsDeps): VaultTool[] {
 
     {
       name: 'capture',
-      description: 'Capture raw text into the inbox as a new note. The quickest way to hand the vault a thought; the agent files it later. Returns the new path and id. Committed as a human-attributed inbox drop; you file it later as the agent.',
+      description: 'Capture raw user text into inbox/ as a note. Use only for raw user captures; use remember for durable memory. Returns path and id. Committed as a human-attributed inbox drop for later filing.',
       inputSchema: { text: z.string().describe('The raw text to capture.') },
       async handler(args) {
         const res = await captureToInbox(core, String(args.text ?? ''), { createdISO: new Date().toISOString() })
@@ -217,9 +217,9 @@ export function createVaultTools(deps: VaultToolsDeps): VaultTool[] {
     {
       name: 'remember',
       description:
-        'Store one durable memory as the agent: upserts memory/<slugified-topic>.md (CAS-guarded, atomic, git-committed, attributed agentkeep-agent). The tool OWNS the whole file — frontmatter (title, type, source, updated) and body are fully replaced on every call, so re-remembering a topic supersedes the old memory cleanly. Frontmatter: title keeps the human topic; type defaults to "fact"; source records where you learned it; updated is stamped today. Wikilink related notes in the content so the memory joins the graph.',
+        'Store one durable memory note. Upserts memory/<slugified-topic>.md as the agent, with CAS, atomic write, git commit, and agentkeep-agent attribution. The tool OWNS the whole file: frontmatter (title, type, source, updated) and body are fully replaced on every call, so re-remembering a topic supersedes the old memory cleanly. Frontmatter: title keeps the human topic; type defaults to "fact"; source records where you learned it; updated is stamped today. Wikilink related notes in the content so the memory joins the graph.',
       inputSchema: {
-        topic: z.string().describe('The memory topic — slugified into memory/<slug>.md.'),
+        topic: z.string().describe('The memory topic, slugified into memory/<slug>.md.'),
         content: z.string().describe('The memory body, plain markdown. [[Wikilink]] related notes.'),
         type: z.enum(MEMORY_TYPES).optional().describe('Kind of memory (default "fact").'),
         source: z.string().optional().describe('Where this was learned (free text).'),
@@ -237,7 +237,7 @@ export function createVaultTools(deps: VaultToolsDeps): VaultTool[] {
         // Compose the whole document via the format-preserving frontmatter
         // writer (it force-quotes the date so the YAML-1.1 read side keeps it a
         // string). The leading newline leaves a blank line between the closing
-        // fence and the body. `title` keeps the human topic — the UI shows
+        // fence and the body. `title` keeps the human topic, the UI shows
         // titles, never the slug.
         let doc = `\n${content}\n`
         doc = setFrontmatterKey(doc, 'title', topic)
@@ -280,7 +280,7 @@ export function createVaultTools(deps: VaultToolsDeps): VaultTool[] {
 
     {
       name: 'delete_note',
-      description: 'Delete one note by vault-relative path as the agent (git rm + commit attributed agentkeep-agent). Use it to clear an inbox/ capture once you have filed it into a task or note, so the inbox empties. The removal is one commit, so it is git-reversible (git revert, or the web Undo) — it is not a destructive erase. A missing path returns a 404 result (a value, not an error); a path that escapes the vault returns 400.',
+      description: 'Delete one note by vault-relative path as the agent (git rm + commit attributed agentkeep-agent). Use it to clear an inbox/ capture once you have filed it into a task or note, so the inbox empties. The removal is one commit, so it is git-reversible (git revert, or the web Undo), not a destructive erase. A missing path returns a 404 result (a value, not an error); a path that escapes the vault returns 400.',
       inputSchema: { path: z.string().describe('Vault-relative path to delete, e.g. inbox/cap_x.md.') },
       async handler(args) {
         const path = String(args.path ?? '')

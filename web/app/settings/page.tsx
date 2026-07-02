@@ -18,16 +18,17 @@ function yamlQuote(value: string): string {
 }
 
 /**
- * Settings → "Connect your agent". The front door for the BYO-agent seam: point
- * a Hermes / OpenClaw / any MCP or file agent at this vault, one step, real commands.
+ * Settings > "Connect your agent". The front door for MCP access: point
+ * any MCP or file agent at this vault, one step, real commands.
  *
- * The honest model: YOUR connected agent does the reasoning over MCP — Agentkeep
+ * The honest model: YOUR connected agent does the reasoning over MCP. Agentkeep
  * needs no API key of its own. Give that agent the maintenance routine
- * (AGENT-ROUTINE.md) and it maintains the vault + writes the brief.
+ * (AGENT-ROUTINE.md) and it stores memory, files inbox captures, links notes,
+ * and handles conflicts.
  *
- * Everything shown is resolved from the live environment (getConnectFacts) — the
+ * Everything shown is resolved from the live environment (getConnectFacts): the
  * actual vault path and the real bin. The config snippets use each agent's
- * verified format (Hermes `mcp_servers` YAML, the standard `mcpServers` JSON), so
+ * common MCP formats (`mcp_servers` YAML, the standard `mcpServers` JSON), so
  * a copy-paste lands working, not a placeholder.
  */
 export default async function SettingsPage() {
@@ -46,9 +47,9 @@ export default async function SettingsPage() {
   const mcpArgs = binPath?.endsWith('.js') ? [binPath, vaultPath] : [vaultPath]
   const serveCommand = shellJoin([mcpCommand, ...mcpArgs])
 
-  // OpenClaw reads the standard `mcpServers` map from `openclaw.json`. Let
-  // JSON.stringify do all string escaping for paths, quotes, and backslashes.
-  const openClawJson = JSON.stringify(
+  // Standard MCP clients read a `mcpServers` map. Let JSON.stringify do all
+  // string escaping for paths, quotes, and backslashes.
+  const mcpJson = JSON.stringify(
     {
       mcpServers: {
         agentkeep: {
@@ -62,17 +63,13 @@ export default async function SettingsPage() {
     2,
   )
 
-  // Hermes reads `~/.hermes/config.yaml` under `mcp_servers:` (stdio: command +
-  // args). Double-quoted YAML scalars keep spaces, quotes, and backslashes safe.
-  const hermesYaml = `mcp_servers:
+  // Some MCP clients read YAML under `mcp_servers:`. Double-quoted YAML scalars
+  // keep spaces, quotes, and backslashes safe.
+  const mcpYaml = `mcp_servers:
   agentkeep:
     command: ${yamlQuote(mcpCommand)}
     args:
 ${mcpArgs.map((arg) => `      - ${yamlQuote(arg)}`).join('\n')}`
-
-  const hermesCli = `hermes mcp add agentkeep --command ${shellQuote(mcpCommand)} --args ${mcpArgs
-    .map(shellQuote)
-    .join(' ')}`
 
   const mcpProbeScript =
     'const msgs=[{jsonrpc:"2.0",id:1,method:"initialize",params:{protocolVersion:"2025-06-18",capabilities:{},clientInfo:{name:"agentkeep-smoke",version:"0"}}},{jsonrpc:"2.0",method:"notifications/initialized",params:{}},{jsonrpc:"2.0",id:2,method:"tools/list",params:{}}];for(const m of msgs){const body=JSON.stringify(m);process.stdout.write("Content-Length: "+Buffer.byteLength(body)+"\\r\\n\\r\\n"+body)}'
@@ -85,7 +82,7 @@ ${mcpArgs.map((arg) => `      - ${yamlQuote(arg)}`).join('\n')}`
           <h1>Connect your agent</h1>
           <p className="connect-lede">
             Point the agent you already run at this vault. It reads and writes the
-            same markdown through one governed seam, every change a reversible
+            same markdown through MCP, every change a reversible
             commit.
           </p>
         </header>
@@ -114,7 +111,7 @@ ${mcpArgs.map((arg) => `      - ${yamlQuote(arg)}`).join('\n')}`
           <span className="lbl">This vault</span>
           <CopyBlock code={vaultPath} />
           <p className="connect-note">
-            Serve the seam over stdio with one command:
+            Serve MCP over stdio with one command:
           </p>
           <CopyBlock code={serveCommand} />
           {binPath ? (
@@ -137,18 +134,19 @@ ${mcpArgs.map((arg) => `      - ${yamlQuote(arg)}`).join('\n')}`
           <div className="keybadge on">
             <span className="keydot" />
             <span className="keytext">
-              <b>Your connected agent does the reasoning</b>: drafts, links, the
-              morning brief. Agentkeep needs no key of its own.
+              <b>Your connected agent does the reasoning</b>: stores memory, files
+              inbox captures, links related notes, and handles conflicts. Agentkeep
+              needs no key of its own.
             </span>
           </div>
           <p className="connect-note">
-            Hand your agent the maintenance routine and it keeps this vault tidy +
-            writes the brief, using only the MCP tools below.
+            Hand your agent the maintenance routine and it keeps this vault tidy,
+            using only the MCP tools below.
           </p>
           <p className="connect-sub sub">
             <b>Give your agent the routine →</b>{' '}
             <code className="inlinecode">AGENT-ROUTINE.md</code> (repo root).
-            Paste it as a system prompt or Hermes skill.
+            Paste it as a system prompt, skill, or schedule prompt.
           </p>
         </section>
 
@@ -171,41 +169,34 @@ ${mcpArgs.map((arg) => `      - ${yamlQuote(arg)}`).join('\n')}`
           </p>
         </section>
 
-        {/* Hermes — the primary / home agent. */}
+        {/* YAML MCP config. */}
         <section className="connect-sec">
-          <span className="lbl">Hermes</span>
+          <span className="lbl">YAML MCP config</span>
           <p className="connect-note">
-            The home agent. Agentkeep is built for Hermes first. Add to{' '}
-            <code className="inlinecode">~/.hermes/config.yaml</code>, then run{' '}
-            <code className="inlinecode">hermes chat</code>:
+            Add this to clients that use <code className="inlinecode">mcp_servers</code>:
           </p>
-          <CopyBlock code={hermesYaml} label="mcp_servers" />
-          <p className="connect-note">Or register it from the CLI:</p>
-          <CopyBlock code={hermesCli} />
+          <CopyBlock code={mcpYaml} label="mcp_servers" />
           <p className="connect-sub sub">
-            Hermes can also write files directly. Point it at the folder above and
-            its notes re-index live (no restart). MCP gives it the governed seam;
-            the folder gives it the raw vault.
+            Agents can also write files directly. Point one at the folder above
+            and its notes re-index live. MCP gives it protected writes; the
+            folder gives it the raw vault.
           </p>
           <p className="connect-sub sub">
-            <b>Then give Hermes the routine →</b>{' '}
+            <b>Then give your agent the routine →</b>{' '}
             <code className="inlinecode">AGENT-ROUTINE.md</code> drops in as a
-            skill at{' '}
-            <code className="inlinecode">~/.hermes/skills/agentkeep-keeper/SKILL.md</code>{' '}
-            and schedules with{' '}
-            <code className="inlinecode">hermes cron create &apos;0 7 * * *&apos;</code>{' '}
-            so it files your inbox and writes the morning brief.
+            system prompt, skill, or scheduled routine so it stores memory, files
+            inbox captures, links notes, and handles conflicts.
           </p>
         </section>
 
-        {/* OpenClaw — also supported. */}
+        {/* JSON MCP config. */}
         <section className="connect-sec">
-          <span className="lbl">OpenClaw</span>
+          <span className="lbl">JSON MCP config</span>
           <p className="connect-note">
-            Add to <code className="inlinecode">openclaw.json</code> under{' '}
-            <code className="inlinecode">mcpServers</code>:
+            Add this to clients that use the standard{' '}
+            <code className="inlinecode">mcpServers</code> map:
           </p>
-          <CopyBlock code={openClawJson} label="mcpServers" />
+          <CopyBlock code={mcpJson} label="mcpServers" />
         </section>
 
         {/* File-only path. */}

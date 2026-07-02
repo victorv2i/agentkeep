@@ -1,7 +1,7 @@
 {
   "name": "@agentkeep/core",
   "version": "0.1.0",
-  "description": "Your agent's memory, as a vault you can read: a self-hosted, Obsidian-compatible markdown vault your agent maintains over an MCP seam.",
+  "description": "Your agent's memory, as a vault you can read: a self-hosted, Obsidian-compatible markdown vault your agent maintains through MCP.",
   "license": "MIT",
   "author": "Victor Iglesias <victoriglesiascs@gmail.com>",
   "homepage": "https://github.com/victorv2i/agentkeep#readme",

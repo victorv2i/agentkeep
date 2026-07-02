@@ -19,7 +19,7 @@ const GROUPS: { type: MemoryNote['type']; label: string }[] = [
   { type: 'other', label: 'Untyped' },
 ]
 
-/** ISO date → "Jun 10" (or the raw string if unparseable — never invent). */
+/** ISO date to "Jun 10" (or the raw string if unparseable, never invent). */
 function shortDate(iso: string): string {
   const d = new Date(iso)
   if (Number.isNaN(d.getTime())) return iso
@@ -38,9 +38,9 @@ function shortDateTime(iso: string): string {
 }
 
 /**
- * "What your agent believes" — the plain markdown under memory/, grouped by
+ * "What your agent believes": the plain markdown under memory/, grouped by
  * type, plus the agent's recent commits. This page only SHOWS what is on disk
- * and in git: no ranking, no recall scoring — retrieval is your agent's job;
+ * and in git: no ranking, no recall scoring. Retrieval is your agent's job;
  * the vault is the readable store.
  */
 export default async function MemoryPage() {
@@ -123,8 +123,8 @@ export default async function MemoryPage() {
           <p className="memempty">
             Next step: ask your connected agent to{' '}
             <code>run the Agentkeep memory-keeper routine</code>. It files inbox
-            captures, updates <code>memory/</code>, links related notes, and writes
-            the brief when your routine asks for one.{' '}
+            captures, updates <code>memory/</code>, links related notes, and handles
+            conflicts.{' '}
             <Link className="connect-link" href="/settings">
               Connect or schedule it
             </Link>
