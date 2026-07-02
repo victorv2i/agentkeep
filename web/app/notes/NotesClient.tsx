@@ -10,6 +10,7 @@ import { extendedMarkdownLanguage } from './editor/wikilink-lang'
 import { livePreview, type WikiLinkParts } from './editor/live-preview'
 import { wikiLinkCompletion } from './editor/wikilink-complete'
 import { inkEditorTheme } from './editor/theme'
+import { isWikilinkTargetResolved } from '@/lib/content-path'
 import {
   listNotesAction,
   loadNoteAction,
@@ -74,20 +75,16 @@ export function NotesClient({
     if (mountedRef.current) setSaveState(next)
   }, [])
 
-  // A synchronous basename set so the live-preview can style resolved vs
+  // A synchronous ref to the note list so the live-preview can style resolved vs
   // placeholder links without an await per render. Refreshed with the note list.
-  const basenames = useMemo(() => {
-    const s = new Set<string>()
-    for (const n of notes) s.add(n.basename.toLowerCase())
-    return s
-  }, [notes])
-  const basenamesRef = useRef(basenames)
-  basenamesRef.current = basenames
+  // `isWikilinkTargetResolved` is the SAME rule the server's resolveTarget (and
+  // the core LinkGraph) uses, so a slash-bearing target like `[[folder/Foo]]`
+  // never shows as resolved here while the click handler (resolveTargetAction)
+  // finds nothing, or vice versa.
+  const notesForResolveRef = useRef(notes)
+  notesForResolveRef.current = notes
   const isResolved = useCallback((target: string) => {
-    const t = target.replace(/\.md$/i, '').trim().toLowerCase()
-    if (t === '') return false
-    const base = t.includes('/') ? (t.split('/').pop() ?? t) : t
-    return basenamesRef.current.has(base)
+    return isWikilinkTargetResolved(target, notesForResolveRef.current)
   }, [])
 
   const notesRef = useRef(notes)

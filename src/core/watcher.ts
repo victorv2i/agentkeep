@@ -38,14 +38,29 @@ export class VaultWatcher {
    * Handle one filesystem event. For add/change it reads the file, hashes it, and
    * skips the reindex if `isSelfWrite` claims this process just wrote it; unlink
    * always removes (the file is gone — nothing to hash, nothing to suppress).
+   *
+   * `resolveSafe`/`readFileOrNull` run OUTSIDE `indexer.reindexFile`'s own
+   * try/catch (they decide self-write suppression first), so a failure here
+   * — e.g. the path was replaced by an escaping symlink, or an unreadable file
+   * — must be caught here too: an uncaught throw would leave this path's OLD
+   * index entry in place (a stale search/backlink hit until the next full
+   * `reindexAll`/restart) instead of clearing it like every other unindexable-
+   * file path already does.
    */
   async handleEvent(kind: WatchEventKind, relPath: string): Promise<void> {
     if (kind === 'unlink') {
       this.indexer.removeFile(relPath)
       return
     }
-    const abs = await this.vault.resolveSafe(relPath)
-    const raw = await readFileOrNull(abs)
+    let raw: string | null
+    try {
+      const abs = await this.vault.resolveSafe(relPath)
+      raw = await readFileOrNull(abs)
+    } catch (err) {
+      this.indexer.removeFile(relPath)
+      console.warn(`agentkeep: watcher failed to read ${relPath}, removed from index:`, (err as Error).message)
+      return
+    }
     if (raw === null) {
       // Raced deletion between the event and our read — treat as removal.
       this.indexer.removeFile(relPath)

@@ -33,3 +33,29 @@ export function isContentPath(relPath: string): boolean {
 export function isNotePath(relPath: string): boolean {
   return isContentPath(relPath) && /\.md$/i.test(relPath)
 }
+
+/**
+ * Shared wikilink-resolution rule: whether `target` currently resolves to an
+ * existing note in `notes`. Mirrors the core `LinkGraph`'s resolver
+ * (src/core/link-graph.ts `resolve`) and the server's `resolveTarget`
+ * (web/lib/vault.ts) EXACTLY, including their case-sensitivity split: a target
+ * WITH a slash addresses a path directly and must match the path case-
+ * sensitively (with or without `.md`); a bare target matches by basename
+ * case-insensitively. Both sides of the editor — the live-preview's "is this a
+ * placeholder?" styling and the click handler's actual navigation/create —
+ * must agree, or a link can render as resolved while clicking it still prompts
+ * to create it (or vice versa).
+ */
+export function isWikilinkTargetResolved(
+  target: string,
+  notes: Array<{ path: string; basename: string }>,
+): boolean {
+  const t = target.replace(/\.md$/i, '').trim()
+  if (t === '') return false
+  if (t.includes('/')) {
+    const withExt = t.toLowerCase().endsWith('.md') ? t : `${t}.md`
+    return notes.some((n) => n.path === withExt || n.path === t)
+  }
+  const key = t.toLowerCase()
+  return notes.some((n) => n.basename.toLowerCase() === key)
+}

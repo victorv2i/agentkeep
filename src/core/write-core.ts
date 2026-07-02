@@ -5,6 +5,7 @@ import { VaultGit, type Author } from './git.js'
 import { contentHash } from './hash.js'
 import { atomicWrite, readFileOrNull } from './atomic.js'
 import { ConflictError } from './errors.js'
+import { withVaultLock } from './vault-lock.js'
 
 export interface ReadResult { content: string; hash: string }
 export interface WriteOpts { author: Author; baseHash: string | null }
@@ -22,6 +23,18 @@ export interface WriteResult { hash: string; commit: string }
  * the exact previous bytes (or remove the newly-created file) and clear any
  * staged entry for the path before rethrowing. The self-write marker is set only
  * AFTER the commit succeeds.
+ *
+ * Cross-process safety: the per-file mutex above is per-INSTANCE — a SEPARATE
+ * process (the web app and the MCP server each open their own vault handle)
+ * has its own mutex map and would not see this one. So the whole read-CAS-
+ * write-git critical section ALSO runs under `withVaultLock` (a `proper-lockfile`
+ * flock keyed on the vault root, visible across processes). The in-process mutex
+ * stays as a cheap fast-path (avoids taking the cross-process lock for writers
+ * that are already serialized in this process); the cross-process lock is what
+ * actually prevents two processes from both passing the same baseHash CAS. The
+ * current on-disk hash is RE-READ and RE-CHECKED against `baseHash` once inside
+ * the lock, so a write that lost the cross-process race gets a ConflictError
+ * instead of clobbering the winner.
  */
 export class WriteCore {
   // TODO(phase2): evict idle per-path mutexes (this map grows once per path).
@@ -52,25 +65,27 @@ export class WriteCore {
   async write(relPath: string, content: string, opts: WriteOpts): Promise<WriteResult> {
     assertVaultContentPath(relPath) // never let a write target .git/ etc. (RCE)
     const abs = await this.vault.resolveSafe(relPath)
-    return this.lockFor(abs).runExclusive(async () => {
-      const current = await readFileOrNull(abs)
-      const currentHash = current === null ? null : contentHash(current)
-      if (currentHash !== opts.baseHash) {
-        throw new ConflictError(relPath, opts.baseHash ?? '(new)', currentHash ?? '(missing)')
-      }
-      try {
-        await atomicWrite(abs, content)
-        const hash = contentHash(content)
-        const commit = await this.git.commitChange(relPath, { author: opts.author, message: `${opts.author}: write ${relPath}` })
-        // Only mark a self-write once the commit succeeds (I1): a failed commit
-        // must not suppress a later watcher event for this path.
-        this.selfWrites.set(relPath, hash)
-        return { hash, commit }
-      } catch (err) {
-        await this.restoreAfterFailedWrite(abs, relPath, current)
-        throw err
-      }
-    })
+    return this.lockFor(abs).runExclusive(() =>
+      withVaultLock(this.vault.root, async () => {
+        const current = await readFileOrNull(abs)
+        const currentHash = current === null ? null : contentHash(current)
+        if (currentHash !== opts.baseHash) {
+          throw new ConflictError(relPath, opts.baseHash ?? '(new)', currentHash ?? '(missing)')
+        }
+        try {
+          await atomicWrite(abs, content)
+          const hash = contentHash(content)
+          const commit = await this.git.commitChange(relPath, { author: opts.author, message: `${opts.author}: write ${relPath}` })
+          // Only mark a self-write once the commit succeeds (I1): a failed commit
+          // must not suppress a later watcher event for this path.
+          this.selfWrites.set(relPath, hash)
+          return { hash, commit }
+        } catch (err) {
+          await this.restoreAfterFailedWrite(abs, relPath, current)
+          throw err
+        }
+      }),
+    )
   }
 
   /**
@@ -96,28 +111,30 @@ export class WriteCore {
   ): Promise<{ ok: true; commit: string } | { ok: false }> {
     assertVaultContentPath(relPath) // never let a delete target .git/ etc.
     const abs = await this.vault.resolveSafe(relPath)
-    return this.lockFor(abs).runExclusive(async () => {
-      const current = await readFileOrNull(abs)
-      if (current === null) return { ok: false }
-      if (typeof opts.baseHash === 'string' && contentHash(current) !== opts.baseHash) {
-        throw new ConflictError(relPath, opts.baseHash, contentHash(current))
-      }
-      try {
-        const commit = await this.git.removePath(relPath, {
-          author: opts.author,
-          message: `${opts.author}: delete ${relPath}`,
-        })
-        return { ok: true, commit }
-      } catch (err) {
-        // The removal unlinked the working file but the commit failed. Re-write
-        // the file from the exact bytes we read under this lock so it is not left
-        // gone-from-disk, and unstage the removal. Best-effort: a failure to
-        // restore must not mask the original commit error.
-        await atomicWrite(abs, current).catch(() => {})
-        await this.git.unstagePath(relPath).catch(() => {})
-        throw err
-      }
-    })
+    return this.lockFor(abs).runExclusive(() =>
+      withVaultLock(this.vault.root, async () => {
+        const current = await readFileOrNull(abs)
+        if (current === null) return { ok: false }
+        if (typeof opts.baseHash === 'string' && contentHash(current) !== opts.baseHash) {
+          throw new ConflictError(relPath, opts.baseHash, contentHash(current))
+        }
+        try {
+          const commit = await this.git.removePath(relPath, {
+            author: opts.author,
+            message: `${opts.author}: delete ${relPath}`,
+          })
+          return { ok: true, commit }
+        } catch (err) {
+          // The removal unlinked the working file but the commit failed. Re-write
+          // the file from the exact bytes we read under this lock so it is not left
+          // gone-from-disk, and unstage the removal. Best-effort: a failure to
+          // restore must not mask the original commit error.
+          await atomicWrite(abs, current).catch(() => {})
+          await this.git.unstagePath(relPath).catch(() => {})
+          throw err
+        }
+      }),
+    )
   }
 
   /** True once if `hash` is the content this core most recently wrote to `relPath`. */

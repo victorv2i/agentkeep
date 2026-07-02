@@ -1,5 +1,8 @@
 import { simpleGit, type SimpleGit } from 'simple-git'
 import { Mutex } from 'async-mutex'
+import { access } from 'node:fs/promises'
+import { join, posix } from 'node:path'
+import { GitStateError } from './errors.js'
 
 export type Author = 'human' | 'agent'
 export interface CommitInfo { sha: string; message: string; authorName: string }
@@ -59,6 +62,42 @@ function pathspec(relPath: string): string[] {
   return ['--', relPath]
 }
 
+async function exists(absPath: string): Promise<boolean> {
+  try {
+    await access(absPath)
+    return true
+  } catch {
+    return false
+  }
+}
+
+/**
+ * Vault-relative paths of TRACKED files with changes, from porcelain status
+ * (NUL-delimited). Deliberately excludes untracked (`??`) paths: a brand-new
+ * note is untracked until its own `git add` + commit step (the normal write-core
+ * flow, and multiple new notes can legitimately be written/committed one after
+ * another), so treating "untracked" as unsafe drift would reject ordinary
+ * sequential writes. The actual threat this guards is a TRACKED file changing
+ * underneath Agentkeep (edited outside it, e.g. directly in Obsidian) — that is
+ * always a non-`??` status code.
+ */
+function dirtyTrackedPathsFromPorcelain(raw: string): string[] {
+  const records = raw.split('\0').filter(Boolean)
+  const paths: string[] = []
+  for (let i = 0; i < records.length; i++) {
+    const record = records[i]!
+    if (record.length < 4) continue
+    const code = record.slice(0, 2)
+    if (code === '??') continue
+    paths.push(record.slice(3))
+    if (code.includes('R') || code.includes('C')) {
+      const extra = records[++i]
+      if (extra) paths.push(extra)
+    }
+  }
+  return paths
+}
+
 export class VaultGit {
   private git: SimpleGit
   // Repo-wide lock: git stages into a single `.git/index` and updates one HEAD
@@ -83,10 +122,66 @@ export class VaultGit {
     }
   }
 
+  /**
+   * Reject a mutation if the repo is not currently safe to commit into:
+   *   - a merge/rebase/cherry-pick is in progress (MERGE_HEAD, rebase-merge/
+   *     rebase-apply, CHERRY_PICK_HEAD) — committing into that state would
+   *     produce a confusing or conflicted commit;
+   *   - HEAD is detached — a commit there is not reachable from any branch and
+   *     is easy to lose;
+   *   - a tracked file OTHER than `relPath` (the one path we intend to mutate)
+   *     is dirty — the exact Serena/dirty-vault outage class: a vault edited
+   *     outside Agentkeep (e.g. directly in Obsidian) after `openVault` must
+   *     not get swept into or silently sit alongside an agent/human commit.
+   * Called under `repoLock` immediately before every git mutation, not just once
+   * at `openVault` — a vault can become unsafe AFTER startup.
+   */
+  private async preflight(relPath: string): Promise<void> {
+    const gitDir = join(this.root, '.git')
+    if (
+      (await exists(join(gitDir, 'MERGE_HEAD'))) ||
+      (await exists(join(gitDir, 'rebase-merge'))) ||
+      (await exists(join(gitDir, 'rebase-apply'))) ||
+      (await exists(join(gitDir, 'CHERRY_PICK_HEAD')))
+    ) {
+      throw new GitStateError(
+        'Refusing to write: a merge/rebase/cherry-pick is in progress in this vault. Resolve or abort it outside Agentkeep, then try again.',
+        'merge-in-progress',
+      )
+    }
+    const symbolicRef = await this.git.raw(['symbolic-ref', '--quiet', 'HEAD']).catch(() => '')
+    if (symbolicRef.trim() === '') {
+      throw new GitStateError(
+        'Refusing to write: this vault’s git HEAD is detached (not on a branch). Check out a branch outside Agentkeep, then try again.',
+        'detached-head',
+      )
+    }
+    const raw = await this.git.raw(['status', '--porcelain=v1', '--untracked-files=all', '-z'])
+    const prefix = (await this.git.raw(['rev-parse', '--show-prefix'])).trim()
+    const dirty = dirtyTrackedPathsFromPorcelain(raw)
+    // git normalizes pathspecs (e.g. collapses `a//n.md` to `a/n.md`) before it
+    // reports status, so the target must be normalized the same way before
+    // comparing — otherwise an alias of the SAME physical file (raw-string
+    // different, resolved path identical — the exact case write-core's abs-
+    // keyed mutex exists to handle) would look like an unrelated dirty path.
+    const target = posix.normalize(prefix + relPath)
+    const unrelated = dirty.filter((p) => posix.normalize(p) !== target)
+    if (unrelated.length > 0) {
+      throw new GitStateError(
+        `Refusing to write: this vault has changes outside Agentkeep unrelated to ${relPath}:\n` +
+          unrelated.slice(0, 12).map((p) => `  - ${p}`).join('\n') +
+          (unrelated.length > 12 ? `\n  ...and ${unrelated.length - 12} more` : '') +
+          '\nCommit, stash, or remove those changes outside Agentkeep, then try again.',
+        'dirty-unrelated',
+      )
+    }
+  }
+
   /** Stage one path and commit it as `author`. Returns the commit SHA. */
   async commitChange(relPath: string, opts: { author: Author; message: string }): Promise<string> {
     const id = IDENTITY[opts.author]
     return this.repoLock.runExclusive(async () => {
+      await this.preflight(relPath)
       // `git add` is REQUIRED, not redundant: `git commit -- <pathspec>` only
       // commits files already KNOWN to git, so a brand-new (untracked) note
       // would fail with "pathspec did not match any file(s) known to git"
@@ -116,6 +211,7 @@ export class VaultGit {
   async removePath(relPath: string, opts: { author: Author; message: string }): Promise<string> {
     const id = IDENTITY[opts.author]
     return this.repoLock.runExclusive(async () => {
+      await this.preflight(relPath)
       try {
         await this.git.raw(['rm', ...pathspec(relPath)])
         await this.git

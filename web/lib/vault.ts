@@ -822,6 +822,17 @@ export async function resolveTarget(target: string): Promise<string | null> {
  * Writes `notes/<basename>.md` with a minimal H1 from the target, through the
  * write-core. Returns the created path; if a note with that basename already
  * exists it just returns that path (idempotent open-or-create).
+ *
+ * Idempotent under a RACE too: two tabs/requests both resolving the same
+ * unresolved target concurrently both pass the initial `resolveTarget` check
+ * (neither sees the other's not-yet-committed note), so both attempt the
+ * expect-create write (`baseHash: null`). Exactly one wins; the loser's write
+ * throws `ConflictError` because the winner's write just created the file. We
+ * catch that specific case, re-resolve, and return the now-existing path
+ * instead of surfacing an error to the loser's tab — the same "open or create"
+ * outcome either request should get. Any OTHER conflict shape (e.g. the target
+ * really doesn't resolve even after the write failed) is unexpected here and
+ * rethrown rather than silently swallowed.
  */
 export async function createNoteForTarget(target: string): Promise<string> {
   const existing = await resolveTarget(target)
@@ -834,7 +845,14 @@ export async function createNoteForTarget(target: string): Promise<string> {
   }
   const { app, indexer } = await getVault()
   const body = `# ${t}\n`
-  await app.core.write(relPath, body, { author: 'human', baseHash: null })
+  try {
+    await app.core.write(relPath, body, { author: 'human', baseHash: null })
+  } catch (err) {
+    if ((err as Error).name !== 'ConflictError') throw err
+    const wonByAnother = await resolveTarget(target)
+    if (wonByAnother) return wonByAnother
+    throw err // the path is contested by something OTHER than a concurrent create — surface it
+  }
   await indexer.reindexFile(relPath)
   return relPath
 }

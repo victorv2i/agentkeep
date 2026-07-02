@@ -46,3 +46,24 @@ describe('loadNote with malformed frontmatter', () => {
     expect(note!.title).toBe('Bad')
   })
 })
+
+describe('createNoteForTarget concurrency', () => {
+  it('two concurrent creates of the SAME unresolved target both return the one created path, neither throws', async () => {
+    const { createNoteForTarget, loadNote } = await import('./vault')
+    // Neither request has seen the other's write yet (both call resolveTarget
+    // first and get null), so both attempt an expect-create write racing on the
+    // same path — this exercises the write-core CAS conflict + the
+    // createNoteForTarget catch-and-re-resolve fallback, not a mock.
+    const [a, b] = await Promise.all([
+      createNoteForTarget('concurrent-target'),
+      createNoteForTarget('concurrent-target'),
+    ])
+    expect(a).toBe('notes/concurrent-target.md')
+    expect(b).toBe('notes/concurrent-target.md')
+
+    const note = await loadNote('notes/concurrent-target.md')
+    expect(note).not.toBeNull()
+    // A clean single write, not a torn/duplicated one.
+    expect(note!.content).toBe('# concurrent-target\n')
+  })
+})

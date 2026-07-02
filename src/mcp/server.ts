@@ -34,6 +34,26 @@ function toCallResult(r: ToolResult) {
   }
 }
 
+/**
+ * Render an UNEXPECTED thrown error (anything a handler didn't catch and
+ * return as `{ok:false}`) the same shape as `toCallResult`'s failure branch.
+ * SPEC.md requires every failing tool call to come back as `isError:true` with
+ * `{error, code}` — without this, a thrown `GitStateError` (the mutation-time
+ * git-safety preflight) or any other unhandled exception would surface as a
+ * raw JSON-RPC failure/rejection instead of a structured tool result. Known
+ * error shapes (`GitStateError`/`ConflictError`/`VaultPathError`, all of which
+ * carry `httpStatus`) keep their status as `code`; anything else has no code.
+ */
+function toErrorCallResult(e: unknown) {
+  const message = e instanceof Error ? e.message : String(e)
+  const httpStatus = e instanceof Error ? (e as unknown as { httpStatus?: unknown }).httpStatus : undefined
+  const code = typeof httpStatus === 'number' ? httpStatus : undefined
+  return {
+    isError: true,
+    content: [{ type: 'text' as const, text: JSON.stringify({ error: message, code }) }],
+  }
+}
+
 export async function startMcpServer(
   deps: VaultToolsDeps,
   opts: StartMcpServerOpts = {},
@@ -45,7 +65,13 @@ export async function startMcpServer(
     server.registerTool(
       tool.name,
       { description: tool.description, inputSchema: tool.inputSchema },
-      async (args: Record<string, unknown>) => toCallResult(await tool.handler(args ?? {})),
+      async (args: Record<string, unknown>) => {
+        try {
+          return toCallResult(await tool.handler(args ?? {}))
+        } catch (e) {
+          return toErrorCallResult(e)
+        }
+      },
     )
   }
 

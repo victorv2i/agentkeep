@@ -85,6 +85,27 @@ describe('VaultWatcher.handleEvent (pure, no real FS timing)', () => {
     expect(remove).toHaveBeenCalledWith('notes/Gone.md')
   })
 
+  it('removes a stale index entry when resolving/reading the path fails on add/change', async () => {
+    // A previously-indexed path whose read now fails (e.g. replaced by an
+    // escaping symlink, or a permissions/race error from resolveSafe) must not
+    // leave its OLD index entry behind — that produces stale search/backlink
+    // hits until a restart. Simulate the failure by stubbing vault.resolveSafe
+    // to throw, independent of any real filesystem race.
+    await write('notes/Stale.md', '# Stale\n\nfindable kumquat.\n')
+    const indexer = new Indexer(vault)
+    await indexer.reindexAll()
+    expect(indexer.search('kumquat')).toHaveLength(1)
+
+    const remove = vi.spyOn(indexer, 'removeFile')
+    vi.spyOn(vault, 'resolveSafe').mockRejectedValueOnce(new Error('simulated resolveSafe failure'))
+    const w = new VaultWatcher(vault, indexer)
+
+    await w.handleEvent('change', 'notes/Stale.md')
+
+    expect(remove).toHaveBeenCalledWith('notes/Stale.md')
+    expect(indexer.search('kumquat')).toHaveLength(0)
+  })
+
   it('consumes a stale self-write marker so external A->B->A edits still reindex', async () => {
     const git = new VaultGit(dir)
     await git.ensureRepo()

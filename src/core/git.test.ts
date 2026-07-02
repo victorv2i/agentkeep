@@ -1,8 +1,10 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest'
-import { mkdtemp, rm, writeFile, readFile } from 'node:fs/promises'
+import { mkdtemp, rm, writeFile, readFile, mkdir } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { simpleGit } from 'simple-git'
 import { VaultGit } from './git.js'
+import { GitStateError } from './errors.js'
 
 let dir: string
 beforeEach(async () => { dir = await mkdtemp(join(tmpdir(), 'ak-git-')) })
@@ -184,5 +186,109 @@ describe('VaultGit', () => {
     const head = await g.headCommit()
     expect(head?.authorName).toBe('agentkeep-human')
     expect(head?.message).toContain('Revert')
+  })
+})
+
+// Git safety must be checked at MUTATION time, not just once at openVault: a
+// vault that becomes dirty/mid-merge/detached AFTER startup must still be
+// rejected on the next write, not silently committed into.
+describe('VaultGit mutation-time preflight', () => {
+  it('rejects commitChange when a merge is in progress (MERGE_HEAD present)', async () => {
+    const g = new VaultGit(dir)
+    await g.ensureRepo()
+    await writeFile(join(dir, 'note.md'), 'v1\n')
+    await g.commitChange('note.md', { author: 'human', message: 'seed' })
+    // Simulate an in-progress merge (as if a conflicting `git merge` were left mid-way).
+    await writeFile(join(dir, '.git', 'MERGE_HEAD'), (await g.headCommit())!.sha + '\n')
+
+    await writeFile(join(dir, 'note.md'), 'v2\n')
+    await expect(g.commitChange('note.md', { author: 'agent', message: 'agent: edit' })).rejects.toMatchObject({
+      name: 'GitStateError',
+      code: 'merge-in-progress',
+    })
+    // The unsafe state was never committed into.
+    expect(await readFile(join(dir, 'note.md'), 'utf8')).toBe('v2\n')
+    const last = await g.lastCommit('note.md')
+    expect(last?.message).toBe('seed')
+  })
+
+  it('rejects removePath when a rebase is in progress (rebase-merge dir present)', async () => {
+    const g = new VaultGit(dir)
+    await g.ensureRepo()
+    await writeFile(join(dir, 'note.md'), 'v1\n')
+    await g.commitChange('note.md', { author: 'human', message: 'seed' })
+    await mkdir(join(dir, '.git', 'rebase-merge'), { recursive: true })
+
+    await expect(g.removePath('note.md', { author: 'agent', message: 'agent: delete' })).rejects.toMatchObject({
+      name: 'GitStateError',
+      code: 'merge-in-progress',
+    })
+    expect(await readFile(join(dir, 'note.md'), 'utf8')).toBe('v1\n')
+  })
+
+  it('rejects a mutation when tracked files OTHER than the target path are dirty', async () => {
+    const g = new VaultGit(dir)
+    await g.ensureRepo()
+    await writeFile(join(dir, 'note.md'), 'v1\n')
+    await writeFile(join(dir, 'other.md'), 'v1\n')
+    await g.commitChange('note.md', { author: 'human', message: 'seed note' })
+    await g.commitChange('other.md', { author: 'human', message: 'seed other' })
+    // Dirty an UNRELATED tracked file outside of agentkeep (e.g. edited directly
+    // in Obsidian while the app was running).
+    await writeFile(join(dir, 'other.md'), 'changed outside agentkeep\n')
+
+    await writeFile(join(dir, 'note.md'), 'v2\n')
+    await expect(g.commitChange('note.md', { author: 'agent', message: 'agent: edit' })).rejects.toMatchObject({
+      name: 'GitStateError',
+      code: 'dirty-unrelated',
+    })
+    // other.md's unrelated edit is untouched, and note.md was never committed.
+    expect(await readFile(join(dir, 'other.md'), 'utf8')).toBe('changed outside agentkeep\n')
+    const last = await g.lastCommit('note.md')
+    expect(last?.message).toBe('seed note')
+  })
+
+  it('rejects a mutation on a detached HEAD', async () => {
+    const g = new VaultGit(dir)
+    await g.ensureRepo()
+    await writeFile(join(dir, 'note.md'), 'v1\n')
+    const sha = await g.commitChange('note.md', { author: 'human', message: 'seed' })
+    await simpleGit(dir).checkout(sha) // detach HEAD at the seed commit
+
+    await writeFile(join(dir, 'note.md'), 'v2\n')
+    await expect(g.commitChange('note.md', { author: 'agent', message: 'agent: edit' })).rejects.toMatchObject({
+      name: 'GitStateError',
+      code: 'detached-head',
+    })
+  })
+
+  it('allows the target path spelled as a raw-string ALIAS (double slash) of itself — normalizes before comparing', async () => {
+    // `a/n.md` and `a//n.md` are different raw pathspecs but the SAME physical
+    // file. git's own status/pathspec machinery normalizes the double slash, so
+    // the preflight's dirty-vs-target comparison must too — otherwise writing
+    // through the alias spelling would see its OWN just-committed path as an
+    // "unrelated" dirty file and wrongly refuse (a real flake this preflight
+    // introduced before the fix: write-core's abs-keyed mutex legitimately lets
+    // two alias-spelled writes to the same file race one another).
+    const g = new VaultGit(dir)
+    await g.ensureRepo()
+    await mkdir(join(dir, 'a'), { recursive: true })
+    await writeFile(join(dir, 'a', 'n.md'), 'v1\n')
+    await g.commitChange('a/n.md', { author: 'human', message: 'seed' })
+    await writeFile(join(dir, 'a', 'n.md'), 'v2\n')
+    const sha = await g.commitChange('a//n.md', { author: 'agent', message: 'agent: edit via alias' })
+    expect(sha).toMatch(/^[0-9a-f]{7,40}$/)
+  })
+
+  it('allows a normal write when the vault is clean and the target path itself is dirty', async () => {
+    const g = new VaultGit(dir)
+    await g.ensureRepo()
+    await writeFile(join(dir, 'note.md'), 'v1\n')
+    await g.commitChange('note.md', { author: 'human', message: 'seed' })
+    // Dirty ONLY the path being intentionally mutated — this is the normal
+    // write-core flow (write to disk, then commit that exact path).
+    await writeFile(join(dir, 'note.md'), 'v2\n')
+    const sha = await g.commitChange('note.md', { author: 'agent', message: 'agent: edit' })
+    expect(sha).toMatch(/^[0-9a-f]{7,40}$/)
   })
 })

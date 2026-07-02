@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest'
-import { mkdtemp, rm } from 'node:fs/promises'
+import { mkdtemp, rm, mkdir } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { Client } from '@modelcontextprotocol/sdk/client/index.js'
@@ -80,6 +80,35 @@ describe('startMcpServer', () => {
       // file untouched
       const onDisk = await ak.core.read('notes/beta.md')
       expect(onDisk!.content).toContain('The widgets note.')
+    } finally {
+      await client.close()
+      await close()
+    }
+  })
+
+  it('maps an UNEXPECTED thrown error (not a handled {ok:false}) to isError, not a rejected call', async () => {
+    const { server, close } = await startMcpServer({ vault: ak.vault, git: ak.git, core: ak.core, indexer }, { connectStdio: false })
+    const [clientT, serverT] = InMemoryTransport.createLinkedPair()
+    await server.connect(serverT)
+    const client = new Client({ name: 'test', version: '0.0.0' })
+    await client.connect(clientT)
+    try {
+      // Simulate a repo mid-merge (git.ts's mutation-time preflight throws
+      // GitStateError, a raw throw the vault-tools handler does NOT catch) so
+      // the SDK wiring — not the handler — is what must turn this into a
+      // structured isError result instead of a JSON-RPC failure/rejection.
+      await mkdir(join(dir, '.git'), { recursive: true })
+      const { writeFile } = await import('node:fs/promises')
+      await writeFile(join(dir, '.git', 'MERGE_HEAD'), 'deadbeef\n')
+
+      const res = await client.callTool({
+        name: 'write_note',
+        arguments: { path: 'notes/new-during-merge.md', content: 'during a merge\n' },
+      })
+      expect(res.isError).toBe(true)
+      const text = (res.content as Array<{ type: string; text: string }>)[0]!.text
+      const payload = JSON.parse(text) as { error: string; code?: number }
+      expect(payload.error).toMatch(/merge/i)
     } finally {
       await client.close()
       await close()
