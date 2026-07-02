@@ -23,7 +23,7 @@
   --panel-2: #2F2820;      /* card / hover elevation */
   --ink: #ECE3D0;          /* parchment text */
   --mut: #B3A78F;
-  --faint: #8C8068;        /* quietest tier — still clears WCAG-AA on small labels */
+  --faint: #9A8E75;        /* quietest tier, still clears WCAG-AA on small labels */
   --line: #352E24;
   --line-2: #473E30;
   --success: #82C79E;      /* success only */
@@ -57,7 +57,7 @@
   --panel-2: #EFE7D5;      /* card / hover */
   --ink: #2B2820;          /* deep ink */
   --mut: #5C5446;
-  --faint: #756B57;        /* quietest tier — still clears WCAG-AA on small labels */
+  --faint: #6D634F;        /* quietest tier, still clears WCAG-AA on small labels */
   --line: #E4DAC6;         /* warm hairline */
   --line-2: #D6CAB2;
   --success: #2F7D54;
@@ -156,6 +156,16 @@ body {
     to { opacity: 1; }
   }
 }
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.001ms !important;
+    animation-iteration-count: 1 !important;
+    scroll-behavior: auto !important;
+    transition-duration: 0.001ms !important;
+  }
+}
 
 /* ===== scrollbars (thin, ink-toned) ===== */
 ::-webkit-scrollbar {
@@ -193,6 +203,15 @@ body {
 }
 .muted { color: var(--mut); }
 .sub { color: var(--faint); font-size: 13px; }
+.standfirst {
+  max-width: 640px;
+  color: var(--mut);
+  font-family: var(--font-display);
+  font-size: 16px;
+  font-style: italic;
+  line-height: 1.5;
+  margin: 0;
+}
 
 /* ===== app shell ===== */
 .app {
@@ -290,9 +309,8 @@ main:focus {
   color: var(--ink);
 }
 .nav a.cur {
-  background: rgba(var(--accg), 0.07);
+  background: transparent;
   color: var(--ink);
-  /* a 2px green margin-rule on the current entry, like a marked line in an index */
   box-shadow: inset 2px 0 0 var(--acc);
 }
 .nav a.cur .g {
@@ -348,8 +366,9 @@ main:focus {
 .themeswitch-ic {
   position: absolute;
   top: 50%;
+  display: inline-flex;
+  align-items: center;
   transform: translateY(-50%);
-  font-size: 10px;
   line-height: 1;
   color: var(--faint);
 }
@@ -383,6 +402,7 @@ main:focus {
 }
 .cap {
   flex: 1;
+  min-width: 0;
   display: flex;
   align-items: center;
   gap: 10px;
@@ -397,6 +417,7 @@ main:focus {
 .cap .p { color: var(--acc); font-weight: 600; }
 .capin {
   flex: 1;
+  min-width: 0;
   background: none;
   border: none;
   outline: none;
@@ -406,7 +427,10 @@ main:focus {
 }
 .capin::placeholder { color: var(--mut); }
 /* The capture input suppresses its own outline; the wrapping box shows focus. */
-.cap:focus-within { border-color: rgba(var(--accg), 0.45); }
+.cap:focus-within {
+  border-color: rgba(var(--accg), 0.45);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--acc) 48%, transparent);
+}
 .capin:disabled { opacity: 0.6; }
 .topnote {
   display: flex;
@@ -427,6 +451,7 @@ main:focus {
 .topnote-icon { flex: none; margin-top: 1px; }
 .topnote.ok .topnote-icon { color: var(--success); }
 .topnote.err { color: var(--danger); }
+.topnote.pending { color: var(--acc); }
 .topnote-snip { font-style: italic; color: var(--ink); }
 .kbd {
   font-family: var(--font-mono);
@@ -478,6 +503,11 @@ main:focus {
 }
 .searchin:focus {
   border-color: rgba(var(--accg), 0.45);
+}
+.searchin:focus-visible {
+  outline: 2px solid var(--acc);
+  outline-offset: 2px;
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--acc) 24%, transparent);
 }
 .searchin::placeholder { color: var(--mut); }
 .searchhint {
@@ -573,6 +603,12 @@ main:focus {
 .notefilter:focus {
   border-color: rgba(var(--accg), 0.4);
 }
+.notefilter:focus-visible,
+.vault-input:focus-visible {
+  outline: 2px solid var(--acc);
+  outline-offset: 2px;
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--acc) 24%, transparent);
+}
 .notefilter::placeholder { color: var(--faint); }
 .notelist-scroll {
   display: flex;
@@ -598,10 +634,18 @@ main:focus {
 }
 .noteitem:hover { background: var(--panel); color: var(--ink); }
 .noteitem.cur {
-  background: rgba(var(--accg), 0.05);
+  background: transparent;
   color: var(--ink);
-  /* the same green margin-rule as the nav's current entry */
   box-shadow: inset 2px 0 0 var(--acc);
+}
+.noteempty {
+  color: var(--faint);
+  border: 1px solid var(--line);
+  border-radius: 3px;
+  padding: 11px 12px;
+  font-size: 13px;
+  font-family: var(--font-display);
+  font-style: italic;
 }
 
 .editorpane {
@@ -628,7 +672,7 @@ main:focus {
   margin: 0;
   overflow-wrap: anywhere;
 }
-.savestatus { display: inline-flex; }
+.savestatus { display: inline-flex; gap: 6px; flex-wrap: wrap; }
 .savebadge {
   display: inline-flex;
   align-items: center;
@@ -650,7 +694,17 @@ main:focus {
 .savebadge.conflict {
   color: var(--warn);
   border-color: rgba(var(--warng), 0.48);
-  background: rgba(var(--warng), 0.1);
+}
+.savebadge.conflict-action {
+  color: var(--warn);
+  border-color: rgba(var(--warng), 0.48);
+  background: none;
+  cursor: pointer;
+}
+.savebadge.conflict-action.danger {
+  color: var(--danger);
+  border-color: rgba(var(--dangerg), 0.48);
+  background: none;
   cursor: pointer;
 }
 .savebadge.error {
@@ -677,6 +731,7 @@ main:focus {
   cursor: pointer;
   font-size: 13px;
 }
+.conflictnote button + button { margin-left: 10px; }
 .savenote {
   margin: 0 36px 6px;
   padding: 10px 14px;
@@ -765,6 +820,11 @@ main:focus {
   padding: 0 36px;
 }
 .editorbox .cm-editor { height: 100%; }
+.editorbox .cm-editor.cm-focused {
+  outline: 2px solid var(--acc) !important;
+  outline-offset: 2px;
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--acc) 24%, transparent);
+}
 .editorempty {
   display: grid;
   place-items: center;
@@ -840,10 +900,9 @@ main:focus {
   letter-spacing: 1px;
   text-transform: uppercase;
   color: var(--acc);
-  border: 1px solid rgba(var(--accg), 0.3);
-  background: rgba(var(--accg), 0.07);
-  border-radius: 2px;
-  padding: 4px 9px;
+  border-left: 2px solid var(--acc);
+  border-radius: 0;
+  padding: 4px 0 4px 8px;
   white-space: nowrap;
 }
 .provbadge .provtime { color: var(--faint); }
@@ -887,6 +946,9 @@ main:focus {
   color: var(--mut);
 }
 .histclose {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
   background: none;
   border: none;
   color: var(--faint);
@@ -943,6 +1005,9 @@ main:focus {
 .histsha { color: var(--faint); }
 .histundo {
   flex: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
   font-family: var(--font-mono);
   font-size: 11px;
   font-weight: 600;
@@ -1175,10 +1240,33 @@ main:focus {
 /* ===== vault graph (/graph) — flat canvas, flat legend, no decoration ===== */
 .graphwrap {
   position: relative;
+  flex: 4 1 360px;
+  min-width: 0;
   /* The canvas sizes itself in JS (viewport minus shell chrome); this just
      keeps layout stable while it loads. */
   min-height: 320px;
 }
+.graphlayout {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: stretch;
+  min-height: 320px;
+}
+.graphpanel {
+  flex: 1 1 280px;
+  max-width: 340px;
+  min-width: 240px;
+  max-height: calc(100vh - 70px);
+  overflow: auto;
+  border-right: 1px solid var(--line);
+  padding: 18px 16px;
+}
+.graphactions {
+  display: flex;
+  gap: 8px;
+  margin: 12px 0 14px;
+}
+.graphsection { margin-top: 18px; }
 .graphcanvas {
   display: block;
   touch-action: none; /* pointer events own pan/drag; no browser scroll fight */
@@ -1360,6 +1448,9 @@ main:focus {
      off-screen. Capping at 0 forces the nav (flex + overflow below) to scroll. */
   .app { grid-template-columns: minmax(0, 1fr); }
   .notes { grid-template-columns: 1fr; height: auto; min-height: calc(100dvh - 64px); }
+  .notes.has-open .editorpane { order: 1; }
+  .notes.has-open .notelist { order: 2; }
+  .notes.has-open .notelist-scroll { max-height: 36dvh; }
   .notelist { border-right: none; border-bottom: 1px solid var(--line); }
   /* .notes drops to height:auto on mobile, so .cm-editor's height:100% would
      collapse to 0 — give the editor a concrete min height and let the page scroll. */
@@ -1367,6 +1458,7 @@ main:focus {
   .editorbox .cm-editor { height: auto; min-height: 60vh; min-height: 60dvh; }
   .rail {
     flex-direction: row;
+    flex-wrap: wrap;
     align-items: center;
     gap: 14px;
     border-right: none;
@@ -1377,10 +1469,27 @@ main:focus {
     padding-left: max(16px, env(safe-area-inset-left));
     overflow-x: visible;
   }
-  /* Only the nav scrolls horizontally; the brand (left) and the toggle (right)
-     sit outside that scroll, so flex pins them and the toggle is always visible. */
+  .brand { flex: 1; }
+  .brand .name { display: none; }
   .railvault { display: none; }
-  .rail .nav { flex-direction: row; flex: 1; min-width: 0; overflow-x: auto; }
+  .rail .nav {
+    order: 2;
+    flex: 0 0 100%;
+    display: grid;
+    grid-template-columns: repeat(5, minmax(0, 1fr));
+    gap: 2px;
+    min-width: 0;
+    overflow: visible;
+  }
+  .nav a {
+    justify-content: center;
+    gap: 5px;
+    min-height: 48px;
+    padding: 6px 4px;
+    font-size: 11.5px;
+  }
+  .nav a span.t { display: inline; }
+  .nav a.cur { box-shadow: inset 0 2px 0 var(--acc); }
   .rail .foot {
     flex: none;
     flex-direction: row;
@@ -1391,7 +1500,7 @@ main:focus {
   .rail .foot .online,
   .rail .foot .muted { display: none; }
   .themeswitch-lbl { display: none; }
-  .nav a span.t { display: none; }
+  .kbd { display: none; }
   .top {
     padding-top: 13px;
     padding-right: max(16px, env(safe-area-inset-right));
@@ -1415,6 +1524,27 @@ main:focus {
     padding-left: max(18px, env(safe-area-inset-left));
   }
   .editorhead { gap: 10px; }
+  .notefilter,
+  .backlink {
+    min-height: 44px;
+  }
+  .graphlayout {
+    display: block;
+  }
+  .graphpanel {
+    max-width: none;
+    min-width: 0;
+    max-height: 34dvh;
+    border-right: none;
+    border-bottom: 1px solid var(--line);
+    padding-right: max(18px, env(safe-area-inset-right));
+    padding-left: max(18px, env(safe-area-inset-left));
+  }
+  .graphwrap {
+    flex-basis: 100%;
+    min-height: 56vh;
+    min-height: 56dvh;
+  }
   .conflictnote,
   .savenote,
   .memoryguard,
@@ -1450,4 +1580,20 @@ main:focus {
     margin-top: 6px;
     padding: 0 4px;
   }
+  .memtitle {
+    font-size: 16px;
+    overflow-wrap: anywhere;
+  }
+  .memex,
+  .memact {
+    font-size: 15px;
+  }
+  .memmeta,
+  .memactpath {
+    font-size: 12.5px;
+  }
+}
+
+@media (pointer: coarse) {
+  .kbd { display: none; }
 }

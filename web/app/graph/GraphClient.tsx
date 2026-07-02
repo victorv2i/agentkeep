@@ -143,6 +143,7 @@ export function GraphClient() {
     let noteFill = '#C9CAD1'
     let hollowStroke = '#8A8B92'
     let label = '#8A8B92'
+    const reducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches
 
     function refreshTheme(): void {
       const cs = getComputedStyle(document.body)
@@ -163,6 +164,7 @@ export function GraphClient() {
       const rect = container!.getBoundingClientRect()
       width = container!.clientWidth
       height = Math.max(320, window.innerHeight - rect.top)
+      height = Math.max(height, container!.clientHeight)
       const dpr = window.devicePixelRatio || 1
       canvas!.width = Math.round(width * dpr)
       canvas!.height = Math.round(height * dpr)
@@ -317,7 +319,11 @@ export function GraphClient() {
           k = 1
           tx = 0
           ty = 0
-          sim?.alpha(0.2).restart()
+          if (reducedMotion) {
+            sim?.stop()
+          } else {
+            sim?.alpha(0.2).restart()
+          }
           scheduleDraw()
         },
       }
@@ -391,7 +397,7 @@ export function GraphClient() {
         if (dragNode) {
           if (!moved && Math.hypot(e.offsetX - downX, e.offsetY - downY) > 3) {
             moved = true
-            sim!.alphaTarget(0.3).restart()
+            if (!reducedMotion) sim!.alphaTarget(0.3).restart()
           }
           if (moved) {
             const w = toWorld(e.offsetX, e.offsetY)
@@ -423,7 +429,12 @@ export function GraphClient() {
             dragNode.fy = null
             sim!.alphaTarget(0)
           } else {
-            selectLocal(dragNode.id)
+            const wasActive = activeIdRef.current === dragNode.id
+            if (e.pointerType !== 'mouse' && wasActive && dragNode.group !== 'placeholder') {
+              router.push('/?path=' + encodeURIComponent(dragNode.id))
+            } else {
+              selectLocal(dragNode.id)
+            }
           }
           dragNode = null
         }
@@ -459,7 +470,12 @@ export function GraphClient() {
       function onResize(): void {
         resize()
         sim!.force('center', forceCenter(width / 2, height / 2))
-        sim!.alpha(0.3).restart()
+        if (reducedMotion) {
+          sim!.stop()
+          sim!.tick(24)
+        } else {
+          sim!.alpha(0.3).restart()
+        }
         scheduleDraw()
       }
 
@@ -490,6 +506,10 @@ export function GraphClient() {
         window.removeEventListener('resize', onResize)
       })
 
+      if (reducedMotion) {
+        sim.stop()
+        sim.tick(140)
+      }
       scheduleDraw()
       requestAnimationFrame(() => fitNodes(nodes))
     }
@@ -512,51 +532,40 @@ export function GraphClient() {
       : `${filteredNodes.length} of ${sortedNodes.length} nodes`
 
   return (
-    <div
-      style={{
-        display: 'flex',
-        flexWrap: 'wrap',
-        alignItems: 'stretch',
-        minHeight: 320,
-      }}
-    >
-      <aside
-        aria-label="Graph nodes"
-        style={{
-          flex: '1 1 280px',
-          maxWidth: 340,
-          minWidth: 240,
-          borderRight: '1px solid var(--line)',
-          padding: '18px 16px',
-          maxHeight: 'calc(100vh - 70px)',
-          overflow: 'auto',
-        }}
-      >
-        <label className="lbl" htmlFor="graph-node-search">
-          Search nodes
-        </label>
-        <input
-          id="graph-node-search"
-          className="searchin"
-          type="search"
-          value={query}
-          onChange={(e) => setQuery(e.target.value)}
-          onKeyDown={(e) => {
-            if (e.key === 'Enter' && filteredNodes[0]) {
-              e.preventDefault()
-              focusNode(filteredNodes[0].id)
-            }
-          }}
-          placeholder="Title, path, or type"
-          disabled={!ready}
-          aria-describedby="graph-node-count"
-          style={{ marginTop: 8 }}
-        />
-        <p id="graph-node-count" className="connect-sub sub" aria-live="polite">
-          {state === 'loading' ? 'Loading graph...' : resultLabel}
+    <>
+      <div className="wrap">
+        <h1 className="hi">Graph</h1>
+        <p className="standfirst">
+          Read your vault as a map of notes, memories, and the links between them.
         </p>
+      </div>
+      <div className="graphlayout">
+        <aside aria-label="Graph nodes" className="graphpanel">
+          <label className="lbl" htmlFor="graph-node-search">
+            Search nodes
+          </label>
+          <input
+            id="graph-node-search"
+            className="searchin"
+            type="search"
+            value={query}
+            onChange={(e) => setQuery(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter' && filteredNodes[0]) {
+                e.preventDefault()
+                focusNode(filteredNodes[0].id)
+              }
+            }}
+            placeholder="Title, path, or type"
+            disabled={!ready}
+            aria-describedby="graph-node-count"
+            style={{ marginTop: 8 }}
+          />
+          <p id="graph-node-count" className="connect-sub sub" aria-live="polite">
+            {state === 'loading' ? 'Loading graph...' : resultLabel}
+          </p>
 
-        <div style={{ display: 'flex', gap: 8, margin: '12px 0 14px' }}>
+          <div className="graphactions">
           <button
             type="button"
             className="kbd"
@@ -576,20 +585,20 @@ export function GraphClient() {
           >
             Reset
           </button>
-        </div>
+          </div>
 
-        {state === 'error' ? (
+          {state === 'error' ? (
           <p className="memempty" role="status">
             Couldn't load the graph. Reload to try again.
           </p>
-        ) : null}
-        {state === 'empty' ? (
+          ) : null}
+          {state === 'empty' ? (
           <p className="memempty" role="status">
             Nothing linked yet. Write some <code>[[wikilinks]]</code>.
           </p>
-        ) : null}
+          ) : null}
 
-        {ready ? (
+          {ready ? (
           <ul className="memlist" aria-label="Node list">
             {filteredNodes.map((n) => (
               <li key={n.id}>
@@ -609,9 +618,9 @@ export function GraphClient() {
               </li>
             ))}
           </ul>
-        ) : null}
+          ) : null}
 
-        <section aria-label="Selected node" style={{ marginTop: 18 }}>
+          <section aria-label="Selected node" className="graphsection">
           <span className="lbl">Neighbors</span>
           {activeNode ? (
             <>
@@ -659,32 +668,31 @@ export function GraphClient() {
           ) : (
             <p className="connect-sub sub">Choose a node to inspect its linked neighbors.</p>
           )}
-        </section>
-      </aside>
+          </section>
+        </aside>
 
-      <div
-        ref={containerRef}
-        className="graphwrap"
-        style={{
-          flex: '4 1 360px',
-          minWidth: 0,
-        }}
-      >
-        {ready ? (
-          <div className="graphlegend mono" aria-hidden="true">
-            <span className="graphchip">
-              <i className="graphdot graphdot-memory" /> memory
-            </span>
-            <span className="graphchip">
-              <i className="graphdot graphdot-note" /> note
-            </span>
-            <span className="graphchip">
-              <i className="graphdot graphdot-hollow" /> uncreated
-            </span>
-          </div>
-        ) : null}
-        <canvas ref={canvasRef} className="graphcanvas" aria-hidden="true" />
+        <div ref={containerRef} className="graphwrap">
+          {ready ? (
+            <div className="graphlegend mono" aria-hidden="true">
+              <span className="graphchip">
+                <i className="graphdot graphdot-memory" /> memory
+              </span>
+              <span className="graphchip">
+                <i className="graphdot graphdot-note" /> note
+              </span>
+              <span className="graphchip">
+                <i className="graphdot graphdot-hollow" /> uncreated
+              </span>
+            </div>
+          ) : null}
+          {state === 'empty' ? (
+            <p className="graphempty" role="status">
+              No links yet. Add <code>[[wikilinks]]</code> in a note.
+            </p>
+          ) : null}
+          <canvas ref={canvasRef} className="graphcanvas" aria-hidden="true" />
+        </div>
       </div>
-    </div>
+    </>
   )
 }

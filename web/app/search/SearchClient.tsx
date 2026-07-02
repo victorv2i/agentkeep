@@ -42,20 +42,25 @@ export function SearchClient({ recent }: { recent: RecentNote[] }) {
   const [total, setTotal] = useState(0)
   const [searched, setSearched] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const [loading, setLoading] = useState(false)
   const [retryKey, setRetryKey] = useState(0)
   const reqId = useRef(0)
 
   useEffect(() => {
+    const id = ++reqId.current
     const query = q.trim()
     if (query === '') {
       setHits([])
       setTotal(0)
       setSearched(false)
       setError(null)
+      setLoading(false)
       return
     }
-    const id = ++reqId.current
+    setHits([])
+    setTotal(0)
     setError(null)
+    setLoading(true)
     // 110ms: long enough to coalesce a keystroke burst, short enough that the
     // debounce (not the ~3ms API) never reads as latency.
     const t = setTimeout(async () => {
@@ -69,16 +74,35 @@ export function SearchClient({ recent }: { recent: RecentNote[] }) {
         setTotal(data.total)
         setSearched(true)
         setError(null)
+        setLoading(false)
       } catch {
         if (id !== reqId.current) return
         setHits([])
         setTotal(0)
         setSearched(true)
         setError('Search could not load. Check the vault and try again.')
+        setLoading(false)
       }
     }, 110)
     return () => clearTimeout(t)
   }, [q, retryKey])
+
+  const resultText =
+    q.trim() === ''
+      ? ''
+      : loading
+        ? 'Searching...'
+        : error
+          ? error
+          : hits.length > 0
+            ? hits.length < total
+              ? `${hits.length} of ${total} matches`
+              : total === 1
+                ? '1 match'
+                : `${total} matches`
+            : searched
+              ? 'No matches'
+              : ''
 
   return (
     <div className="search">
@@ -91,6 +115,9 @@ export function SearchClient({ recent }: { recent: RecentNote[] }) {
         aria-label="Search your vault"
         autoFocus
       />
+      <div className="sr-only" role="status" aria-live="polite" aria-atomic="true">
+        {resultText}
+      </div>
       {q.trim() === '' ? (
         <>
           <p className="searchhint">Type to search titles and note text across your vault.</p>
@@ -110,50 +137,55 @@ export function SearchClient({ recent }: { recent: RecentNote[] }) {
             </>
           ) : null}
         </>
-      ) : error ? (
-        <div className="searcherror" role="status" aria-live="polite">
-          <p>{error}</p>
-          <button type="button" onClick={() => setRetryKey((n) => n + 1)}>
-            Try again
-          </button>
-        </div>
-      ) : hits.length > 0 ? (
-        <>
-          <p className="sr-count">
-            {hits.length < total
-              ? `${hits.length} of ${total} matches`
-              : total === 1
-                ? '1 match'
-                : `${total} matches`}
-          </p>
-          <ul className="searchres">
-            {hits.map((h) => (
-              <li key={h.path}>
-                <Link
-                  className="searchres-item sr-col"
-                  href={`/?path=${encodeURIComponent(h.path)}`}
-                >
-                  <span className="sr-top">
-                    <span className="sr-title">{h.title}</span>
-                    <span className="sr-kind">{kindOf(h.path)}</span>
-                  </span>
-                  {h.snippet ? (
-                    <span className="sr-snippet">
-                      {h.snippet.before}
-                      {h.snippet.match !== '' ? (
-                        <em className="sr-match">{h.snippet.match}</em>
+      ) : (
+        <div aria-busy={loading} aria-live="off">
+          {loading ? <p className="sr-count">Searching...</p> : null}
+          {error ? (
+            <div className="searcherror" role="status">
+              <p>{error}</p>
+              <button type="button" onClick={() => setRetryKey((n) => n + 1)}>
+                Try again
+              </button>
+            </div>
+          ) : hits.length > 0 ? (
+            <>
+              <p className="sr-count">
+                {hits.length < total
+                  ? `${hits.length} of ${total} matches`
+                  : total === 1
+                    ? '1 match'
+                    : `${total} matches`}
+              </p>
+              <ul className="searchres">
+                {hits.map((h) => (
+                  <li key={h.path}>
+                    <Link
+                      className="searchres-item sr-col"
+                      href={`/?path=${encodeURIComponent(h.path)}`}
+                    >
+                      <span className="sr-top">
+                        <span className="sr-title">{h.title}</span>
+                        <span className="sr-kind">{kindOf(h.path)}</span>
+                      </span>
+                      {h.snippet ? (
+                        <span className="sr-snippet">
+                          {h.snippet.before}
+                          {h.snippet.match !== '' ? (
+                            <em className="sr-match">{h.snippet.match}</em>
+                          ) : null}
+                          {h.snippet.after}
+                        </span>
                       ) : null}
-                      {h.snippet.after}
-                    </span>
-                  ) : null}
-                </Link>
-              </li>
-            ))}
-          </ul>
-        </>
-      ) : searched ? (
-        <p className="searchhint">No matches.</p>
-      ) : null}
+                    </Link>
+                  </li>
+                ))}
+              </ul>
+            </>
+          ) : searched && !loading ? (
+            <p className="searchhint">No matches.</p>
+          ) : null}
+        </div>
+      )}
     </div>
   )
 }

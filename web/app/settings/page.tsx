@@ -212,10 +212,6 @@ ${mcpArgs.map((arg) => `      - ${yamlQuote(arg)}`).join('\n')}`
           </p>
         </section>
 
-        <p className="connect-foot sub">
-          Theme: Reading Room · Library Green. This page is about connecting; the look
-          is fixed for now.
-        </p>
       </div>
     </Shell>
   )

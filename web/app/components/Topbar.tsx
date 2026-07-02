@@ -14,7 +14,7 @@ function shorten(s: string, max = 52): string {
 
 /**
  * The capture box: files raw text into the vault's inbox as the human, for your
- * connected agent to file into memory from there. ⌘K/Ctrl+K focuses it; the
+ * connected agent to file into memory from there. Cmd/Ctrl+K focuses it; the
  * confirmation under the bar echoes what was captured and self-dismisses.
  */
 export function Topbar() {
@@ -29,24 +29,25 @@ export function Topbar() {
   function submitCapture() {
     const value = text.trim()
     if (value === '' || capturing) return
+    setText('')
     startCapture(async () => {
       try {
         const res = await captureTextAction(value)
         if (res.ok) {
-          setText('')
           setNote({ kind: 'ok', text: 'Captured', snippet: value })
-          inputRef.current?.focus() // ready for the next thought
+          inputRef.current?.focus()
         } else {
+          setText((current) => (current.trim() === '' ? value : current))
           setNote({ kind: 'err', text: res.error })
         }
       } catch {
+        setText((current) => (current.trim() === '' ? value : current))
         setNote({ kind: 'err', text: 'Couldn’t save that. Try again.' })
       }
     })
   }
 
-  // ⌘K / Ctrl+K focuses the capture box — wires the badge so it's a real
-  // affordance, not dead chrome. preventDefault keeps the browser's own
+  // Cmd/Ctrl+K focuses the capture box. preventDefault keeps the browser's own
   // Cmd/Ctrl+K (e.g. address-bar search) from stealing it.
   useEffect(() => {
     if (!/Mac|iPhone|iPad|iPod/.test(navigator.platform)) setShortcut('Ctrl+K')
@@ -74,6 +75,7 @@ export function Topbar() {
       <div className="top">
         <form
           className="cap"
+          aria-busy={capturing}
           onSubmit={(e) => {
             e.preventDefault()
             submitCapture()
@@ -89,7 +91,7 @@ export function Topbar() {
             onChange={(e) => setText(e.target.value)}
             placeholder="Capture anything… a task, a thought, who you just met"
             aria-label="Capture to inbox"
-            disabled={capturing}
+            enterKeyHint="send"
           />
         </form>
         <button
@@ -102,6 +104,11 @@ export function Topbar() {
           {shortcut}
         </button>
       </div>
+      {capturing ? (
+        <div className="topnote pending" role="status" aria-live="polite">
+          Capturing...
+        </div>
+      ) : null}
       {note ? (
         <div className={`topnote ${note.kind}`} role="status">
           {note.kind === 'ok' ? (

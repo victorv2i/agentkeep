@@ -60,7 +60,7 @@ export default async function MemoryPage() {
     <Shell user={user}>
       <div className="wrap">
         <h1 className="hi">What your agent believes</h1>
-        <p className="sub">
+        <p className="standfirst">
           Every memory is a plain markdown note under <code>memory/</code>, written by your
           agent&rsquo;s <code>remember</code> tool, editable by you, every change a git commit.
         </p>

@@ -154,7 +154,6 @@ export function VaultSwitcher({
               type="button"
               disabled={pending}
               onClick={() => commitOpen(confirm.root)}
-              style={{ minHeight: 34 }}
             >
               {pending ? 'Opening...' : 'Open this folder'}
             </button>

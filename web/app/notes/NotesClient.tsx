@@ -57,6 +57,7 @@ export function NotesClient({
   // inline prompt (themed), never a native window.confirm dialog.
   const [createTarget, setCreateTarget] = useState<string | null>(null)
   const [memoryEditArmed, setMemoryEditArmed] = useState<Record<string, true>>({})
+  const [draftCopied, setDraftCopied] = useState(false)
 
   const cmRef = useRef<ReactCodeMirrorRef>(null)
   const saveTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
@@ -380,6 +381,25 @@ export function NotesClient({
     await openNote(path)
   }, [createTarget, openNote, refreshNotes])
 
+  const copyDraft = useCallback(async () => {
+    const text = docRef.current
+    if (navigator.clipboard?.writeText) {
+      await navigator.clipboard.writeText(text)
+    } else {
+      const ta = document.createElement('textarea')
+      ta.value = text
+      ta.setAttribute('readonly', '')
+      ta.style.position = 'fixed'
+      ta.style.top = '-1000px'
+      document.body.appendChild(ta)
+      ta.select()
+      document.execCommand('copy')
+      document.body.removeChild(ta)
+    }
+    setDraftCopied(true)
+    window.setTimeout(() => setDraftCopied(false), 2200)
+  }, [])
+
   // Undo ONE agent-authored commit on the open note. The server reverts that
   // commit (a new human commit), re-reads the note (fresh content + hash so the
   // CAS stays correct), and returns the refreshed provenance. We swap the buffer
@@ -553,7 +573,7 @@ export function NotesClient({
   const memoryGuardActive = open ? open.path.startsWith('memory/') && !memoryEditArmed[open.path] : false
 
   return (
-    <div className="notes">
+    <div className={open ? 'notes has-open' : 'notes'}>
       <aside className="notelist">
         <input
           className="notefilter"
@@ -564,17 +584,23 @@ export function NotesClient({
           aria-label="Filter notes"
         />
         <div className="notelist-scroll">
-          {filtered.map((n) => (
-            <button
-              key={n.path}
-              type="button"
-              className={open?.path === n.path ? 'noteitem cur' : 'noteitem'}
-              title={n.tooltip}
-              onClick={() => void openNote(n.path)}
-            >
-              {n.title}
-            </button>
-          ))}
+          {filtered.length > 0 ? (
+            filtered.map((n) => (
+              <button
+                key={n.path}
+                type="button"
+                className={open?.path === n.path ? 'noteitem cur' : 'noteitem'}
+                title={n.tooltip}
+                onClick={() => void openNote(n.path)}
+              >
+                {n.title}
+              </button>
+            ))
+          ) : (
+            <div className="noteempty" role="status">
+              {notes.length === 0 ? 'No notes yet.' : 'No notes match that filter.'}
+            </div>
+          )}
         </div>
       </aside>
 
@@ -622,7 +648,8 @@ export function NotesClient({
               ) : null}
               <SaveBadge
                 state={saveState}
-                onReload={() => void openNote(open.path, null, { discardCurrent: true })}
+                onLoadDisk={() => void openNote(open.path, null, { discardCurrent: true })}
+                onCopyDraft={() => void copyDraft()}
                 onRetry={() => void doSave()}
               />
             </header>
@@ -636,10 +663,13 @@ export function NotesClient({
             ) : null}
             {saveState === 'conflict' ? (
               <div className="conflictnote" role="status" aria-live="polite">
-                This note changed since you opened it. Reload to merge; your text is
-                kept.{' '}
+                This note changed on disk. Keep editing, copy your draft, or load
+                the disk version.{' '}
+                <button type="button" onClick={() => void copyDraft()}>
+                  {draftCopied ? 'Draft copied' : 'Copy my draft'}
+                </button>
                 <button type="button" onClick={() => void openNote(open.path, null, { discardCurrent: true })}>
-                  Reload
+                  Load disk version (discards your draft)
                 </button>
               </div>
             ) : null}
@@ -714,7 +744,11 @@ export function NotesClient({
                 </svg>
               </span>
               <p className="ee-title">Your vault</p>
-              <p className="ee-sub">Pick a note on the left, or let your agent keep it for you.</p>
+              <p className="ee-sub">
+                {notes.length === 0
+                  ? 'Your vault is empty. Capture something above, or connect your agent.'
+                  : 'Pick a note.'}
+              </p>
               <div className="ee-links">
                 <a className="ee-link" href="/settings">Connect your agent →</a>
                 <a className="ee-link" href="/memory">What it believes →</a>
@@ -752,6 +786,34 @@ function historyAction(message: string): string {
   return m
 }
 
+function HistoryIcon({ name }: { name: 'close' | 'undo' }) {
+  const p = {
+    width: 14,
+    height: 14,
+    viewBox: '0 0 14 14',
+    fill: 'none',
+    stroke: 'currentColor',
+    strokeWidth: 1.3,
+    strokeLinecap: 'round' as const,
+    strokeLinejoin: 'round' as const,
+    'aria-hidden': true,
+  }
+  if (name === 'close') {
+    return (
+      <svg {...p}>
+        <path d="M3.7 3.7 10.3 10.3" />
+        <path d="M10.3 3.7 3.7 10.3" />
+      </svg>
+    )
+  }
+  return (
+    <svg {...p}>
+      <path d="M4.1 5.4H1.9V3.2" />
+      <path d="M4 5.4A4.2 4.2 0 1 1 3 9.5" />
+    </svg>
+  )
+}
+
 /**
  * The open note's recent commit history with per-row author chips. Each
  * agent-authored row gets an Undo button (reverts THAT commit as a new human
@@ -775,7 +837,7 @@ function HistoryPanel({
       <div className="histhead">
         <span className="histlbl">History · {prov.history.length}</span>
         <button type="button" className="histclose" onClick={onClose} aria-label="Close history">
-          ✕
+          <HistoryIcon name="close" />
         </button>
       </div>
       <div className="histrows">
@@ -801,7 +863,8 @@ function HistoryPanel({
                   disabled={undoingSha !== null}
                   aria-busy={busy}
                 >
-                  {busy ? '↺ Undoing…' : '↺ Undo'}
+                  <HistoryIcon name="undo" />
+                  {busy ? 'Undoing...' : 'Undo'}
                 </button>
               ) : null}
             </div>
@@ -812,13 +875,15 @@ function HistoryPanel({
   )
 }
 
-function SaveBadge({
+export function SaveBadge({
   state,
-  onReload,
+  onLoadDisk,
+  onCopyDraft,
   onRetry,
 }: {
   state: SaveState
-  onReload: () => void
+  onLoadDisk: () => void
+  onCopyDraft: () => void
   onRetry: () => void
 }) {
   const map: Record<SaveState, string> = {
@@ -831,8 +896,12 @@ function SaveBadge({
   if (state === 'conflict') {
     return (
       <span className="savestatus" role="status" aria-live="polite" aria-atomic="true">
-        <button type="button" className="savebadge conflict" onClick={onReload}>
-          {map[state]} · Reload
+        <span className="savebadge conflict">{map[state]}</span>
+        <button type="button" className="savebadge conflict-action" onClick={onCopyDraft}>
+          Copy my draft
+        </button>
+        <button type="button" className="savebadge conflict-action danger" onClick={onLoadDisk}>
+          Load disk
         </button>
       </span>
     )

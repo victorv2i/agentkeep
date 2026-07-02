@@ -61,8 +61,8 @@ const editorTheme = EditorView.theme(
     '.cm-tooltip.cm-tooltip-autocomplete': {
       backgroundColor: 'var(--panel)',
       border: '1px solid var(--line-2)',
-      borderRadius: '8px',
-      boxShadow: '0 8px 28px rgba(0,0,0,0.18)',
+      borderRadius: '3px',
+      boxShadow: 'var(--lift)',
     },
     '.cm-tooltip-autocomplete > ul > li': {
       fontFamily: 'var(--font-geist), system-ui, sans-serif',
@@ -133,7 +133,7 @@ const editorTheme = EditorView.theme(
     '.cm-lp-image img': {
       maxWidth: '100%',
       maxHeight: '420px',
-      borderRadius: '8px',
+      borderRadius: '3px',
       border: '1px solid var(--line)',
     },
 
@@ -153,9 +153,10 @@ const editorTheme = EditorView.theme(
       gap: '8px',
       padding: '4px 11px',
       margin: '1px 0',
-      borderRadius: '8px',
-      border: '1px solid rgba(var(--accg),0.28)',
-      background: 'rgba(var(--accg),0.06)',
+      borderRadius: '3px',
+      border: '1px solid var(--line)',
+      borderLeft: '2px solid var(--acc)',
+      background: 'var(--panel)',
       color: INK,
       cursor: 'pointer',
       verticalAlign: 'baseline',

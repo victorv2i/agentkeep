@@ -426,11 +426,28 @@ class EmbedCardWidget extends WidgetType {
     card.className = this.resolved ? CLS.embed : `${CLS.embed} ${CLS.embedNew}`
     const icon = document.createElement('span')
     icon.className = CLS.embedIcon
-    icon.textContent = '⌗' // ⌗ VIEWDATA SQUARE, a "section" glyph
+    const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg')
+    svg.setAttribute('viewBox', '0 0 14 14')
+    svg.setAttribute('width', '14')
+    svg.setAttribute('height', '14')
+    svg.setAttribute('fill', 'none')
+    svg.setAttribute('stroke', 'currentColor')
+    svg.setAttribute('stroke-width', '1.3')
+    svg.setAttribute('stroke-linecap', 'round')
+    svg.setAttribute('stroke-linejoin', 'round')
+    svg.setAttribute('aria-hidden', 'true')
+    const top = document.createElementNS('http://www.w3.org/2000/svg', 'path')
+    top.setAttribute('d', 'M3 4.5h8')
+    const mid = document.createElementNS('http://www.w3.org/2000/svg', 'path')
+    mid.setAttribute('d', 'M3 7h8')
+    const bot = document.createElementNS('http://www.w3.org/2000/svg', 'path')
+    bot.setAttribute('d', 'M3 9.5h5.5')
+    svg.append(top, mid, bot)
+    icon.append(svg)
     const title = document.createElement('span')
     title.className = CLS.embedTitle
     title.textContent = this.parts.anchor
-      ? `${this.parts.target} › ${this.parts.anchor.value}` // › between note and anchor
+      ? `${this.parts.target} / ${this.parts.anchor.value}`
       : this.parts.target
     const tag = document.createElement('span')
     tag.className = CLS.embedTag
@@ -830,7 +847,7 @@ const handleWikiLink: NodeHandler = (node, { state, out, opts }) => {
     )
     return
   }
-  const label = alias ?? (anchor ? `${target} › ${anchor.value}` : target)
+  const label = alias ?? (anchor ? `${target} / ${anchor.value}` : target)
   out.widget(
     Decoration.replace({ widget: new WikiLinkWidget(label, parts, opts.isResolved(target), opts.onWikiLink) }),
     node.from,

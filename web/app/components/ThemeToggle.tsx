@@ -2,6 +2,33 @@
 
 import { useEffect, useState } from 'react'
 
+function ThemeIcon({ kind }: { kind: 'moon' | 'sun' }) {
+  const p = {
+    width: 12,
+    height: 12,
+    viewBox: '0 0 12 12',
+    fill: 'none',
+    stroke: 'currentColor',
+    strokeWidth: 1.3,
+    strokeLinecap: 'round' as const,
+    strokeLinejoin: 'round' as const,
+    'aria-hidden': true,
+  }
+  if (kind === 'sun') {
+    return (
+      <svg {...p}>
+        <circle cx="6" cy="6" r="2.1" />
+        <path d="M6 1.4v1.1M6 9.5v1.1M1.4 6h1.1M9.5 6h1.1M2.7 2.7l0.8 0.8M8.5 8.5l0.8 0.8M9.3 2.7l-0.8 0.8M3.5 8.5l-0.8 0.8" />
+      </svg>
+    )
+  }
+  return (
+    <svg {...p}>
+      <path d="M8.5 9.6A4.2 4.2 0 0 1 5.2 2.1 4.4 4.4 0 1 0 8.5 9.6z" />
+    </svg>
+  )
+}
+
 /**
  * Dark / light switch for the rail foot. The actual theme is an attribute on
  * <html> (data-theme), set before first paint by the no-flash script in
@@ -40,10 +67,10 @@ export function ThemeToggle() {
     >
       <span className="themeswitch-track">
         <span className="themeswitch-ic moon" aria-hidden="true">
-          ☾
+          <ThemeIcon kind="moon" />
         </span>
         <span className="themeswitch-ic sun" aria-hidden="true">
-          ☀
+          <ThemeIcon kind="sun" />
         </span>
         <span className="themeswitch-knob" />
       </span>
