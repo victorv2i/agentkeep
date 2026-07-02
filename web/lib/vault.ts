@@ -392,7 +392,14 @@ export async function listNotes(): Promise<NoteListItem[]> {
         // Unstattable — displayTitle degrades to a bare "Capture".
       }
     }
-    const title = displayTitle(p, raw, { mtime })
+    let title: string
+    try {
+      title = displayTitle(p, raw, { mtime })
+    } catch {
+      // Malformed frontmatter (e.g. unterminated YAML quote) — the humanized
+      // basename is the honest fallback rather than breaking the whole list.
+      title = displayTitle(p, null, { mtime })
+    }
     // For captures the title is derived, never the hex id — keep the real path
     // reachable as a tooltip for honesty.
     items.push({ path: p, title, basename, ...(isCapture ? { tooltip: p } : {}) })
@@ -650,7 +657,15 @@ export async function loadNote(relPath: string): Promise<LoadedNote | null> {
   const { app, indexer } = await getVault()
   const r = await app.core.read(relPath)
   if (r === null) return null
-  const title = parseNote(relPath, r.content).title
+  let title: string
+  try {
+    title = parseNote(relPath, r.content).title
+  } catch {
+    // Malformed frontmatter (e.g. unterminated YAML quote) — fall back to the
+    // display title (basename-derived) rather than crashing the load; the raw
+    // content is still returned so the editor can show/fix it.
+    title = displayTitle(relPath, null)
+  }
   const backlinks = await backlinkItems(indexer.getBacklinks(relPath))
   return { path: relPath, title, content: r.content, hash: r.hash, backlinks }
 }

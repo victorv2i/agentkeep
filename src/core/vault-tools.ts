@@ -52,6 +52,35 @@ export interface VaultToolsDeps {
 const ok = (data: unknown): ToolResult => ({ ok: true, data })
 const err = (error: string, code?: number): ToolResult => ({ ok: false, error, code })
 
+// Note-path guard for the note tools (read_note/write_note/delete_note): only
+// ordinary `.md` notes, PLUS the one documented exception — AGENT-ROUTINE.md
+// has the agent write tasks via `write_note` to `tasks/<id>.json` (a flat
+// path, see task.ts `taskPath`). Without this an MCP caller could point
+// read_note/write_note/delete_note at any in-vault file (assertVaultContentPath
+// already blocks escaping to dotfolders, but not e.g. arbitrary non-markdown
+// content or other extensions).
+const TASK_JSON_RE = /^tasks\/[^/]+\.json$/i
+function isAllowedNotePath(path: string): boolean {
+  return /\.md$/i.test(path) || TASK_JSON_RE.test(path)
+}
+
+/** Max content size write_note/remember will accept, in bytes (UTF-8). */
+const MAX_NOTE_CONTENT_BYTES = 1024 * 1024 // 1MB
+
+function checkNotePath(path: string): ToolResult | null {
+  if (!isAllowedNotePath(path)) {
+    return err(`Not a note path (must be .md or tasks/<id>.json): ${path}`, 400)
+  }
+  return null
+}
+
+function checkContentSize(content: string): ToolResult | null {
+  if (Buffer.byteLength(content, 'utf8') > MAX_NOTE_CONTENT_BYTES) {
+    return err(`Content exceeds the ${MAX_NOTE_CONTENT_BYTES}-byte note size cap.`, 400)
+  }
+  return null
+}
+
 /** Lowercase, non-alphanumerics → '-', collapsed and trimmed: 'My  Topic!!' → 'my-topic'. */
 function slugifyTopic(topic: string): string {
   return topic.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '')
@@ -100,6 +129,8 @@ export function createVaultTools(deps: VaultToolsDeps): VaultTool[] {
       inputSchema: { path: z.string().describe('Vault-relative path, e.g. notes/foo.md.') },
       async handler(args) {
         const path = String(args.path ?? '')
+        const pathErr = checkNotePath(path)
+        if (pathErr) return pathErr
         try {
           assertVaultContentPath(path) // don't let the agent read .git/config etc.
           const r = await core.read(path)
@@ -126,6 +157,10 @@ export function createVaultTools(deps: VaultToolsDeps): VaultTool[] {
       async handler(args) {
         const path = String(args.path ?? '')
         const content = String(args.content ?? '')
+        const pathErr = checkNotePath(path)
+        if (pathErr) return pathErr
+        const sizeErr = checkContentSize(content)
+        if (sizeErr) return sizeErr
         const baseHash = typeof args.baseHash === 'string' ? args.baseHash : null
         try {
           const r = await core.write(path, content, { author: 'agent', baseHash })
@@ -249,6 +284,8 @@ export function createVaultTools(deps: VaultToolsDeps): VaultTool[] {
       inputSchema: { path: z.string().describe('Vault-relative path to delete, e.g. inbox/cap_x.md.') },
       async handler(args) {
         const path = String(args.path ?? '')
+        const pathErr = checkNotePath(path)
+        if (pathErr) return pathErr
         try {
           const r = await deleteNote(core, path)
           if (!r.ok) return err(`Note not found: ${path}`, 404) // nothing to delete, no throw

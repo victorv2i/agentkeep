@@ -19,6 +19,37 @@ describe('readNote', () => {
     expect(n.data.status).toBe('open')
     expect(n.body).toContain('[[Launch Agentkeep v1]]')
   })
+
+  it('does not execute JS frontmatter (---js fence)', () => {
+    const sentinel = { pwned: false }
+    ;(globalThis as Record<string, unknown>).__frontmatterSentinel = sentinel
+    const evil = `---js\nglobalThis.__frontmatterSentinel.pwned = true;\n({})\n---\n\nBody\n`
+    expect(() => readNote(evil)).not.toThrow()
+    expect(sentinel.pwned).toBe(false)
+    delete (globalThis as Record<string, unknown>).__frontmatterSentinel
+  })
+
+  it('does not execute JS frontmatter (---javascript fence)', () => {
+    const sentinel = { pwned: false }
+    ;(globalThis as Record<string, unknown>).__frontmatterSentinel2 = sentinel
+    const evil = `---javascript\nglobalThis.__frontmatterSentinel2.pwned = true;\n({})\n---\n\nBody\n`
+    expect(() => readNote(evil)).not.toThrow()
+    expect(sentinel.pwned).toBe(false)
+    delete (globalThis as Record<string, unknown>).__frontmatterSentinel2
+  })
+
+  it('returns the body safely (not a crash) for a blocked JS frontmatter note', () => {
+    const evil = `---js\n({foo: "bar"})\n---\n\nBody text\n`
+    const n = readNote(evil)
+    expect(n.body).toContain('Body text')
+    expect(n.data).toEqual({})
+  })
+
+  it('still parses a normal YAML note after the engine lockdown', () => {
+    const n = readNote(SAMPLE)
+    expect(n.data.title).toBe('Sam — Q3 invoice')
+    expect(n.data.tags).toEqual(['invoice', 'q3'])
+  })
 })
 
 describe('setFrontmatterKey', () => {

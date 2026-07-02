@@ -1,9 +1,32 @@
 import matter from 'gray-matter'
-import { parseDocument, Scalar, isScalar } from 'yaml'
+import { parseDocument, Scalar, isScalar, parse as parseYaml } from 'yaml'
 
 export interface ParsedNote {
   data: Record<string, unknown>
   body: string
+}
+
+// gray-matter picks a parse "engine" from the language tag on the opening
+// fence (e.g. `---js`) and its built-in `javascript`/`js` engine parses via
+// raw `eval()` — a note starting with `---js` or `---javascript` would
+// execute arbitrary code just by being read (indexed or rendered). Lock
+// gray-matter to YAML only: default to the `yaml` language, and override the
+// javascript/js engines with one that refuses to parse instead of eval-ing.
+// A refused parse is treated as "no usable frontmatter" (see readNote below),
+// never a crash.
+class UnsupportedFrontmatterLanguageError extends Error {}
+const REFUSE_JS_ENGINE = {
+  parse(): never {
+    throw new UnsupportedFrontmatterLanguageError('JS frontmatter not allowed')
+  },
+}
+const SAFE_MATTER_OPTIONS = {
+  language: 'yaml',
+  engines: {
+    yaml: (s: string) => (parseYaml(s) as Record<string, unknown>) ?? {},
+    javascript: REFUSE_JS_ENGINE,
+    js: REFUSE_JS_ENGINE,
+  },
 }
 
 // Match the SAME frontmatter shapes gray-matter accepts on the read side, so a
@@ -32,8 +55,17 @@ function needsQuoting(value: unknown): value is string {
 
 /** Read-only split (gray-matter). Never use gray-matter to WRITE. */
 export function readNote(raw: string): ParsedNote {
-  const g = matter(raw)
-  return { data: g.data as Record<string, unknown>, body: g.content }
+  try {
+    const g = matter(raw, SAFE_MATTER_OPTIONS)
+    return { data: g.data as Record<string, unknown>, body: g.content }
+  } catch (err) {
+    if (err instanceof UnsupportedFrontmatterLanguageError) {
+      // Blocked (e.g. ---js) frontmatter: treat as no frontmatter rather than
+      // crash. Strip nothing — return the raw content as the body.
+      return { data: {}, body: raw }
+    }
+    throw err
+  }
 }
 
 /**

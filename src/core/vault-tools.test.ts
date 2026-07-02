@@ -401,4 +401,58 @@ describe('createVaultTools', () => {
       await rm(outside, { force: true })
     }
   })
+
+  // The note tools operate on any in-vault file with no extension guard, no
+  // size limit — read_note/write_note/delete_note should only touch ordinary
+  // markdown notes (plus the documented tasks/<id>.json exception AGENT-
+  // ROUTINE.md relies on write_note for), and reject oversize writes.
+
+  it('read_note rejects a non-.md, non-task path (400, structured error)', async () => {
+    const r = await call('read_note', { path: 'notes/secret.txt' })
+    expect(r.ok).toBe(false)
+    if (r.ok) return
+    expect(r.code).toBe(400)
+    expect(r.error.length).toBeGreaterThan(0)
+  })
+
+  it('write_note rejects a non-.md, non-task path (400) and writes nothing', async () => {
+    const r = await call('write_note', { path: 'notes/secret.txt', content: 'nope\n' })
+    expect(r.ok).toBe(false)
+    if (r.ok) return
+    expect(r.code).toBe(400)
+    expect(await ak.core.read('notes/secret.txt')).toBeNull()
+  })
+
+  it('delete_note rejects a non-.md, non-task path (400)', async () => {
+    const r = await call('delete_note', { path: 'notes/secret.txt' })
+    expect(r.ok).toBe(false)
+    if (r.ok) return
+    expect(r.code).toBe(400)
+  })
+
+  it('write_note rejects oversize content (400) and writes nothing', async () => {
+    const huge = 'x'.repeat(1024 * 1024 + 1) // over the 1MB cap
+    const r = await call('write_note', { path: 'notes/huge.md', content: huge })
+    expect(r.ok).toBe(false)
+    if (r.ok) return
+    expect(r.code).toBe(400)
+    expect(await ak.core.read('notes/huge.md')).toBeNull()
+  })
+
+  it('write_note still writes an ordinary .md note under the size cap', async () => {
+    const r = await call('write_note', { path: 'notes/normal.md', content: '# Normal\n\nFine.\n' })
+    expect(r.ok).toBe(true)
+    const onDisk = await ak.core.read('notes/normal.md')
+    expect(onDisk!.content).toContain('Fine.')
+  })
+
+  it('write_note still writes the documented tasks/<id>.json path (AGENT-ROUTINE.md)', async () => {
+    const r = await call('write_note', {
+      path: 'tasks/t1.json',
+      content: JSON.stringify({ id: 't1', title: 'Do the thing', status: 'inbox', created: '2026-06-10' }),
+    })
+    expect(r.ok).toBe(true)
+    const onDisk = await ak.core.read('tasks/t1.json')
+    expect(onDisk!.content).toContain('Do the thing')
+  })
 })

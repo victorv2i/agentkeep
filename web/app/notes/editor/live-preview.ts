@@ -293,12 +293,40 @@ class ImageWidget extends WidgetType {
     img.src = this.src
     img.alt = this.alt
     if (this.alt) img.title = this.alt
+    // Remote http(s)/data image URLs go straight to the source server/embed —
+    // never leak the vault note's path/referrer to it. Local vault images go
+    // through our own /api/image route, so no cross-origin referrer applies.
+    if (/^(https?:|data:)/i.test(this.src)) img.referrerPolicy = 'no-referrer'
     box.appendChild(img)
     return box
   }
   ignoreEvent(): boolean {
     return false
   }
+}
+
+// Schemes a rendered `<a href>` is allowed to navigate to directly. Anything
+// else (javascript:, data:, vbscript:, file:, ...) must never reach a live
+// href — a click is fully intercepted by our own handler below (never the
+// browser's default navigation), but the href is also what a user sees via
+// hover/copy-link/middle-click/drag, so it must be inert for those paths too.
+const SAFE_LINK_SCHEME_RE = /^(https?|mailto):/i
+// A scheme-qualified URL (`foo:bar`) that ISN'T one of the safe schemes above.
+// A bare relative/internal target (`notes/foo`, `#heading`, `foo.md`) has no
+// scheme prefix and is intentionally left alone — those are resolved by
+// `onClick` (open the note / prompt to create it), not by the anchor's href.
+const HAS_SCHEME_RE = /^[a-z][a-z0-9+.-]*:/i
+
+/**
+ * Pure helper: the `href` attribute value to actually put on the rendered
+ * anchor for a markdown `[text](url)` link. Safe schemes (http/https/mailto)
+ * and scheme-less (relative/internal) targets pass through unchanged; any
+ * other scheme (javascript:, data:, vbscript:, file:, ...) is rendered inert
+ * (`#`) so it is never a live, navigable href.
+ */
+export function sanitizeLinkHref(url: string): string {
+  if (HAS_SCHEME_RE.test(url) && !SAFE_LINK_SCHEME_RE.test(url)) return '#'
+  return url
 }
 
 /** A clickable inline link replacing `[text](url)`. */
@@ -317,7 +345,7 @@ class LinkWidget extends WidgetType {
     const a = document.createElement('a')
     a.className = CLS.link
     a.textContent = this.text
-    a.href = this.url
+    a.href = sanitizeLinkHref(this.url)
     a.title = this.url
     if (/^https?:\/\//i.test(this.url) || this.url.startsWith('mailto:')) {
       a.target = '_blank'
